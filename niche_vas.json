@@ -1,0 +1,50 @@
+{
+  "photocopy_print": {
+    "Sales": {"dr":"131","cr":"511","vat_cr":"3331"},
+    "Paper_Ink": {"dr":"642","vat_dr":"133","cr":"331"},
+    "Machine_Maint": {"dr":"642","cr":"111"},
+    "Cash_Drawer": {"dr":"111","cr":"511"}
+  },
+  "retail_grocery": {
+    "Purchases": {"dr":"156","vat_dr":"133","cr":"331"},
+    "Sales": {"dr":"111","cr":"511","vat_cr":"3331"},
+    "Spoilage": {"dr":"642","cr":"156"},
+    "Rent_Utilities": {"dr":"642","cr":"111"}
+  },
+  "services_consulting": {
+    "Fees": {"dr":"131","cr":"511","vat_cr":"3331"},
+    "Subcontract": {"dr":"642","cr":"331"},
+    "Software_Tools": {"dr":"642","vat_dr":"133","cr":"112"},
+    "Owner_Draw": {"dr":"421","cr":"111"}
+  },
+  "clinic_pharmacy": {
+    "Med_Supplies": {"dr":"156","vat_dr":"133","cr":"331"},
+    "Service_Rev": {"dr":"111","cr":"511"},
+    "Equipment": {"dr":"211","vat_dr":"133","cr":"331"},
+    "Waste_Compliance": {"dr":"642","cr":"111"}
+  },
+  "fnb_cafe": {
+    "Ingredients": {"dr":"156","vat_dr":"133","cr":"331"},
+    "Daily_Sales": {"dr":"111","cr":"511"},
+    "Staff_Wages": {"dr":"642","cr":"334"},
+    "Packaging": {"dr":"642","cr":"111"}
+  },
+  "vics_2025_mfg": {
+    "Raw_Material": {"dr":"152","vat_dr":"133","cr":"331"},
+    "Production_Cost": {"dr":"154","cr":"152"},
+    "Finished_Goods": {"dr":"156","cr":"154"},
+    "Sales": {"dr":"131","cr":"511","vat_cr":"3331"}
+  },
+  "vics_2025_agri": {
+    "Seeds_Fertilizer": {"dr":"152","cr":"111"},
+    "Harvest_Sales": {"dr":"111","cr":"511"},
+    "Logistics": {"dr":"642","cr":"331"},
+    "Storage": {"dr":"642","cr":"111"}
+  },
+  "vics_2025_it": {
+    "Software_Dev": {"dr":"511","cr":"131"},
+    "Cloud_Hosting": {"dr":"642","cr":"112"},
+    "Staff_Payroll": {"dr":"642","cr":"334"},
+    "Tech_Equipment": {"dr":"211","vat_dr":"133","cr":"112"}
+  }
+}

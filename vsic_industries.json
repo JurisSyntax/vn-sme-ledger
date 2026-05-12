@@ -1,0 +1,81 @@
+{
+  "photocopy_print": [
+    {"vsic":"4761","name":"Bán lẻ sách, báo, tạp chí, văn phòng phẩm","tax_cat":"distribution","examples":"Cửa hàng sách, văn phòng phẩm"},
+    {"vsic":"1811","name":"In ấn","tax_cat":"manufacturing","examples":"In offset, in kỹ thuật số"},
+    {"vsic":"1812","name":"Dịch vụ liên quan đến in","tax_cat":"services","examples":"In ảnh, photocopy, đóng sách"},
+    {"vsic":"7730","name":"Cho thuê máy móc, thiết bị văn phòng","tax_cat":"services","examples":"Cho thuê máy photocopy"}
+  ],
+  "retail_grocery": [
+    {"vsic":"4711","name":"Bán lẻ lương thực, thực phẩm, đồ uống, thuốc lá (cửa hàng tổng hợp)","tax_cat":"distribution","examples":"Siêu thị mini, tạp hóa"},
+    {"vsic":"4721","name":"Bán lẻ lương thực trong cửa hàng chuyên doanh","tax_cat":"distribution","examples":"Tiệm gạo, nông sản"},
+    {"vsic":"4722","name":"Bán lẻ thực phẩm chế biến, đông lạnh","tax_cat":"distribution","examples":"Thịt, cá, rau củ"},
+    {"vsic":"4723","name":"Bán lẻ đồ uống","tax_cat":"distribution","examples":"Nước uống đóng chai, bia"},
+    {"vsic":"4724","name":"Bán lẻ thuốc lá, sản phẩm thuốc lá","tax_cat":"distribution","examples":"Đại lý thuốc lá"},
+    {"vsic":"4690","name":"Bán buôn hàng hóa tổng hợp","tax_cat":"distribution","examples":"Đại lý phân phối hàng FMCG"}
+  ],
+  "services_consulting": [
+    {"vsic":"6201","name":"Lập trình máy vi tính","tax_cat":"services","examples":"Phần mềm, ứng dụng, website"},
+    {"vsic":"6202","name":"Tư vấn máy vi tính và quản trị hệ thống","tax_cat":"services","examples":"IT support, cloud, ERP"},
+    {"vsic":"6209","name":"Hoạt động dịch vụ công nghệ thông tin khác","tax_cat":"services","examples":"Data entry, hosting"},
+    {"vsic":"6311","name":"Xử lý dữ liệu, cho thuê và các hoạt động liên quan","tax_cat":"services","examples":"Data analytics, outsourcing"},
+    {"vsic":"6920","name":"Hoạt động kế toán, kiểm toán, tư vấn thuế","tax_cat":"services","examples":"Dịch vụ kế toán, kiểm toán"},
+    {"vsic":"7020","name":"Hoạt động tư vấn quản lý","tax_cat":"services","examples":"Tư vấn chiến lược, quản trị"},
+    {"vsic":"7310","name":"Quảng cáo","tax_cat":"services","examples":"Agency quảng cáo, digital marketing"},
+    {"vsic":"6910","name":"Hoạt động pháp luật","tax_cat":"services","examples":"Văn phòng luật sư, tư vấn pháp lý"}
+  ],
+  "clinic_pharmacy": [
+    {"vsic":"8620","name":"Hoạt động khám chữa bệnh đa khoa và chuyên khoa","tax_cat":"services","examples":"Phòng khám tư, nha khoa"},
+    {"vsic":"8690","name":"Hoạt động y tế khác","tax_cat":"services","examples":"Vật lý trị liệu, xét nghiệm"},
+    {"vsic":"4772","name":"Bán lẻ thuốc, dụng cụ y tế, mỹ phẩm","tax_cat":"distribution","examples":"Nhà thuốc, dược phẩm"},
+    {"vsic":"8610","name":"Hoạt động của bệnh viện","tax_cat":"services","examples":"Bệnh viện tư nhân"}
+  ],
+  "fnb_cafe": [
+    {"vsic":"5610","name":"Nhà hàng và các dịch vụ ăn uống phục vụ lưu động","tax_cat":"services","examples":"Nhà hàng, quán ăn, food truck"},
+    {"vsic":"5621","name":"Cung cấp dịch vụ ăn uống theo hợp đồng","tax_cat":"services","examples":"Catering, suất ăn công nghiệp"},
+    {"vsic":"5629","name":"Dịch vụ ăn uống khác","tax_cat":"services","examples":"Quán cà phê, trà sữa, bar"},
+    {"vsic":"5630","name":"Quán rượu, bia, quán bar","tax_cat":"services","examples":"Bar, pub, nightclub"},
+    {"vsic":"1050","name":"Chế biến sữa và các sản phẩm từ sữa","tax_cat":"manufacturing","examples":"Sữa chua, phô mai tự làm"}
+  ],
+  "real_estate": [
+    {"vsic":"6810","name":"Kinh doanh bất động sản, quyền sử dụng đất của chủ sở hữu","tax_cat":"other","examples":"Mua bán, cho thuê BĐS"},
+    {"vsic":"6820","name":"Tư vấn, môi giới, đấu giá BĐS","tax_cat":"services","examples":"Sàn giao dịch BĐS, môi giới"},
+    {"vsic":"6832","name":"Quản lý bất động sản theo hợp đồng hoặc phí","tax_cat":"services","examples":"Quản lý chung cư, văn phòng"}
+  ],
+  "construction": [
+    {"vsic":"4100","name":"Xây dựng nhà các loại","tax_cat":"manufacturing","examples":"Nhà ở, biệt thự, chung cư"},
+    {"vsic":"4210","name":"Xây dựng đường bộ và đường sắt","tax_cat":"manufacturing","examples":"Hạ tầng giao thông"},
+    {"vsic":"4220","name":"Xây dựng công trình kỹ thuật dân dụng khác","tax_cat":"manufacturing","examples":"Cầu, hệ thống xử lý nước"},
+    {"vsic":"4290","name":"Xây dựng công trình kỹ thuật khác","tax_cat":"manufacturing","examples":"Nhà máy, kho xưởng"},
+    {"vsic":"4311","name":"Phá dỡ","tax_cat":"services","examples":"Phá dỡ công trình cũ"},
+    {"vsic":"4330","name":"Hoàn thiện công trình xây dựng","tax_cat":"manufacturing","examples":"Nội thất, lắp đặt, sơn"},
+    {"vsic":"4390","name":"Hoạt động xây dựng khác","tax_cat":"manufacturing","examples":"Lắp dựng cấu kiện thép"}
+  ],
+  "transport_logistics": [
+    {"vsic":"4931","name":"Vận tải hành khách đường bộ trong nội thành","tax_cat":"manufacturing","examples":"Xe buýt, taxi, xe ôm công nghệ"},
+    {"vsic":"4932","name":"Vận tải hành khách đường bộ khác","tax_cat":"manufacturing","examples":"Xe khách liên tỉnh, tour"},
+    {"vsic":"4933","name":"Vận tải hàng hóa bằng đường bộ","tax_cat":"manufacturing","examples":"Xe tải, container, chuyển nhà"},
+    {"vsic":"5020","name":"Vận tải hàng hóa đường thủy nội địa","tax_cat":"manufacturing","examples":"Sà lan, thuyền chở hàng"},
+    {"vsic":"5210","name":"Kho bãi và lưu giữ hàng hóa","tax_cat":"services","examples":"Kho lạnh, kho ngoại quan"},
+    {"vsic":"5224","name":"Xếp dỡ hàng hóa","tax_cat":"services","examples":"Dịch vụ bốc xếp"},
+    {"vsic":"5229","name":"Hoạt động hỗ trợ vận tải khác","tax_cat":"services","examples":"Giao nhận, logistics"},
+    {"vsic":"5320","name":"Chuyển phát","tax_cat":"services","examples":"Giao hàng nhanh, courier"}
+  ],
+  "education_training": [
+    {"vsic":"8530","name":"Giáo dục nghề nghiệp","tax_cat":"services","examples":"Trường nghề, dạy nghề"},
+    {"vsic":"8541","name":"Giáo dục đại học","tax_cat":"services","examples":"Trường đại học tư thục"},
+    {"vsic":"8559","name":"Giáo dục khác chưa được phân vào đâu","tax_cat":"services","examples":"Trung tâm Anh ngữ, học thêm"},
+    {"vsic":"8560","name":"Hoạt động hỗ trợ giáo dục","tax_cat":"services","examples":"Tư vấn du học, coaching"}
+  ],
+  "general_trade": [
+    {"vsic":"4610","name":"Đại lý, môi giới thương mại","tax_cat":"distribution","examples":"Đại lý phân phối, hoa hồng"},
+    {"vsic":"4621","name":"Bán buôn lương thực","tax_cat":"distribution","examples":"Bán sỉ gạo, nông sản"},
+    {"vsic":"4659","name":"Bán buôn máy móc, thiết bị","tax_cat":"distribution","examples":"Thiết bị công nghiệp, dụng cụ"},
+    {"vsic":"4741","name":"Bán lẻ máy vi tính, thiết bị ngoại vi, phần mềm","tax_cat":"distribution","examples":"Cửa hàng laptop, điện thoại"},
+    {"vsic":"4742","name":"Bán lẻ thiết bị viễn thông","tax_cat":"distribution","examples":"Cửa hàng điện thoại, phụ kiện"},
+    {"vsic":"4751","name":"Bán lẻ hàng dệt","tax_cat":"distribution","examples":"Vải, quần áo thời trang"},
+    {"vsic":"4759","name":"Bán lẻ đồ điện gia dụng, nội thất","tax_cat":"distribution","examples":"Điện máy, đồ gia dụng"},
+    {"vsic":"4771","name":"Bán lẻ quần áo, giày dép","tax_cat":"distribution","examples":"Thời trang, giày dép"},
+    {"vsic":"4791","name":"Bán lẻ theo đơn đặt hàng qua bưu điện hoặc internet","tax_cat":"distribution","examples":"TMĐT, Shopee, Lazada"},
+    {"vsic":"4799","name":"Bán lẻ hàng hóa khác chưa được phân vào đâu","tax_cat":"distribution","examples":"Cửa hàng tổng hợp"}
+  ]
+}

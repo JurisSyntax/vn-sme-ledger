@@ -1,0 +1,1 @@
+{'client', 'tab_ledger', 'credit', 'date', 'add_btn', 'ref', 'account', 'tab_reports', 'add_line_btn', 'tab_directories', 'remove_line_btn', 'note', 'clear_btn', 'tab_analytics', 'update_btn', 'debit', 'delete_btn', 'niche_label', 'post_btn', 'tab_settings', 'tab_invoices', 'edit_hint', 'gen_invoice_btn', 'tab_history'}

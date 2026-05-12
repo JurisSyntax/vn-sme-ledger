@@ -1,0 +1,29 @@
+[
+  {
+    "type": "Freelancer",
+    "name": "Mẫu Thu chi Freelancer 2025",
+    "items": [
+      {"code": "IN-FRE-01", "name": "Thu nhập từ Dự án (Project Income)", "tax_cat": "services", "vsic": "6201"},
+      {"code": "EX-FRE-01", "name": "Chi phí thiết bị / Subscriptions", "tax_cat": "expense", "vsic": "N/A"},
+      {"code": "EX-FRE-02", "name": "Chi phí tiếp khách / Cafe làm việc", "tax_cat": "expense", "vsic": "N/A"}
+    ]
+  },
+  {
+    "type": "Household",
+    "name": "Mẫu Hộ kinh doanh (TT40) 2025",
+    "items": [
+      {"code": "IN-HH-01", "name": "Doanh thu bán lẻ hàng hóa", "tax_cat": "distribution", "vsic": "4711"},
+      {"code": "IN-HH-02", "name": "Doanh thu dịch vụ ăn uống", "tax_cat": "fnb", "vsic": "5610"},
+      {"code": "EX-HH-01", "name": "Tiền thuê mặt bằng / Kho bãi", "tax_cat": "expense", "vsic": "N/A"}
+    ]
+  },
+  {
+    "type": "SME-Internal",
+    "name": "Kế toán nội bộ SME (Quản trị) 2025",
+    "items": [
+      {"code": "IN-SME-01", "name": "Doanh thu sản xuất thực tế", "tax_cat": "manufacturing", "vsic": "10-33"},
+      {"code": "EX-SME-01", "name": "Chi phí lương công nhân (Thực chi)", "tax_cat": "expense", "vsic": "N/A"},
+      {"code": "EX-SME-02", "name": "Chi phí nguyên vật liệu (Nhập kho)", "tax_cat": "expense", "vsic": "N/A"}
+    ]
+  }
+]
