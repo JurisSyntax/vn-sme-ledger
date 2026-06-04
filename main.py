@@ -3,8 +3,14 @@ from tkinter import ttk, messagebox
 import datetime, os, json
 import db, tax_engine, analytics, sync, utils
 import config, tabs_extra, debt_manager
+from core.validation import ClientValidationError, InvoiceValidationError, validate_invoice_payload
+from demo.simulator import seed_agri_demo
+from demo.log_rotator import DemoLogRotator
 from vas_mapper import auto_vas_lines, VAS_RULES
 from presets_loader import get_vas_rules
+from core.encryption import encrypt_value, decrypt_value
+from core.ui_layout import dashboard_layout, form_column_count
+
 
 class Tooltip:
     def __init__(self, widget, text):
@@ -32,16 +38,106 @@ class Tooltip:
         self.tip_window = None
         if tw: tw.destroy()
 
+class NotebookPlaceholder(tk.Frame):
+    def __init__(self, master, change_callback=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.tabs_dict = {}
+        self.tab_names = []
+        self.current_frame = None
+        self.change_callback = change_callback
+
+    def add(self, frame, text):
+        self.tabs_dict[text] = frame
+        self.tab_names.append(text)
+        frame.pack_forget()
+
+    def select(self, target):
+        target_frame = None
+        if isinstance(target, int):
+            if 0 <= target < len(self.tab_names):
+                text = self.tab_names[target]
+                target_frame = self.tabs_dict[text]
+        elif isinstance(target, str):
+            if target in self.tabs_dict:
+                target_frame = self.tabs_dict[target]
+            else:
+                # Substring matching fallback (e.g. "🏠" matches "🏠 Trang chủ (Home)")
+                for k, f in self.tabs_dict.items():
+                    if target in k:
+                        target_frame = f
+                        break
+                if not target_frame:
+                    for f in self.tabs_dict.values():
+                        if str(f) == target:
+                            target_frame = f
+                            break
+        else:
+            target_frame = target
+
+        if target_frame:
+            if self.current_frame:
+                self.current_frame.pack_forget()
+            self.current_frame = target_frame
+            target_frame.pack(fill="both", expand=True)
+            if self.change_callback:
+                class DummyEvent:
+                    widget = self
+                self.change_callback(DummyEvent())
+
+    def tabs(self):
+        return [str(f) for f in self.tabs_dict.values()]
+
+    def tab(self, tab_id, option=None, **kwargs):
+        if isinstance(tab_id, int):
+            if 0 <= tab_id < len(self.tab_names):
+                name = self.tab_names[tab_id]
+                if option == "text":
+                    return name
+        for name, f in self.tabs_dict.items():
+            if str(f) == tab_id or f == tab_id:
+                if option == "text":
+                    return name
+        return ""
+
+    def index(self, query):
+        if query == "current":
+            return str(self.current_frame) if self.current_frame else ""
+        if isinstance(query, int) and 0 <= query < len(self.tab_names):
+            return str(self.tabs_dict[self.tab_names[query]])
+        if query in self.tab_names:
+            return self.tab_names.index(query)
+        # Substring matching fallback
+        for i, name in enumerate(self.tab_names):
+            if isinstance(query, str) and query in name:
+                return i
+        for i, f in enumerate(self.tabs_dict.values()):
+            if str(f) == query or f == query:
+                return i
+        return query
+
+    def current_index(self):
+        if self.current_frame:
+            for i, f in enumerate(self.tabs_dict.values()):
+                if f == self.current_frame:
+                    return i
+        return 0
+
+    def bind(self, event, callback, add=None):
+        if event == "<<NotebookTabChanged>>":
+            self.change_callback = callback
+        else:
+            super().bind(event, callback, add)
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.settings = config.load_settings()
         self.lbl = config.get_labels(self.settings)
-        self.title("VN SME Ledger Suit (Beta v1)")
-        self.geometry("1300x850")
-        self.minsize(1200, 800)
-        self.configure(bg="#F8F9FA")
-        # Try to set icon (ICO preferred for Windows window icon)
+        self.title("VN SME Ledger Suite (Beta v2)")
+        self.geometry("1400x880")
+        self.minsize(1250, 800)
+        
+        # Try to set icon
         for icon_name in ["logo.ico", "logo_fixed.png", "logo.png"]:
             p = utils.get_resource_path(icon_name)
             if os.path.exists(p):
@@ -53,28 +149,28 @@ class App(tk.Tk):
                         self.iconphoto(False, img)
                     break
                 except: pass
+                
         self._theme = self.settings.get("theme", "light")
         self.db = db.init_db("data/ledger.db")
         self.tax = tax_engine.load_tax()
         self.editing_entry_id = None
         self._current_inv_client_id = None
-        self._sub_tips = {} # Initialize early
+        self._sub_tips = {}
         self._current_tip = None
         self._current_tip_idx = -1
-        self._browser_visible = False # Track visibility
+        self._browser_visible = False
         
-        # ── APPLY MODERN UI STYLE ─────────────────────────────
+        # ── APPLY MODERN UI STYLE (ĐÔNG HỒ THEME) ──────────────────
         style = ttk.Style()
         style.theme_use('clam')
         
-        # Colors: Backgrounds and Highlights
-        bg_color = "#F0F2F5" # Softer grey-blue background
-        fg_color = "#1C1E21"
-        accent_color = "#0078D4" # Fluent Blue
+        bg_color = "#F8F9FA"  # Soft off-white
+        fg_color = "#0F172A"  # Dark Slate 900
+        accent_color = "#00796B"  # Đông Hồ Teal Green
+        deep_blue = "#1565C0"  # Đông Hồ Deep Blue
         
         self.configure(bg=bg_color)
-        
-        style.configure(".", font=("Segoe UI", 10), background=bg_color, foreground=fg_color)
+        style.configure(".", font=("Segoe UI", 10), background="#FFFFFF", foreground=fg_color)
         
         # ── GLOBAL MOUSEWHEEL FIX (WINDOWS) ───────────────────────
         def _on_mousewheel(event):
@@ -85,34 +181,40 @@ class App(tk.Tk):
                 except:
                     pass
         self.bind_all("<MouseWheel>", _on_mousewheel)
-
-        # ── COMPACT ICON SIDEBAR ──
-        style.configure("TNotebook", background="#FFFFFF", borderwidth=0, tabposition="wn")
-        style.configure("TNotebook.Tab", font=("Segoe UI", 12), padding=[10, 20], background="#FFFFFF", width=4) 
-        style.map("TNotebook.Tab", 
-                  background=[("selected", "#E7F3FF")], 
-                  foreground=[("selected", accent_color)])
         
         style.configure("TFrame", background="#FFFFFF")
-        style.configure("TLabelframe", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground="#0078D4", bordercolor="#EEE")
-        style.configure("TLabelframe.Label", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground="#0078D4")
+        style.configure("TLabelframe", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground=accent_color, bordercolor="#E2E8F0")
+        style.configure("TLabelframe.Label", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground=accent_color)
         
-        style.configure("Treeview", font=("Segoe UI", 9), rowheight=30, background="#FFFFFF", fieldbackground="#FFFFFF", borderwidth=0)
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"), background="#F5F5F5", foreground="#333", padding=5)
-        style.map("Treeview", background=[("selected", "#E3F2FD")], foreground=[("selected", "black")])
+        style.configure("Treeview", font=("Segoe UI", 10), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", borderwidth=0)
+        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"), background="#E2E8F0", foreground=fg_color, padding=6)
+        style.map("Treeview", background=[("selected", "#E0F2F1")], foreground=[("selected", "#004D40")])
         
         style.configure("TCombobox", padding=6)
-        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#E0E0E0")
-        style.map("TButton", background=[("active", "#BDBDBD")])
+        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#E2E8F0")
+        style.map("TButton", background=[("active", "#CBD5E1")])
         
-        self._change_niche()
-
-        # ── TOP BAR ──────────────────────────────────────────
-        top = ttk.Frame(self); top.pack(fill="x", padx=10, pady=8)
-        self._lbl_niche_icon = tk.Label(top, text="🏢", font=("Segoe UI", 16), bg=bg_color)
+        # ── MAIN LAYOUT CONTAINERS ─────────────────────────
+        self.main_container = tk.Frame(self, bg=bg_color)
+        self.main_container.pack(fill="both", expand=True)
+        
+        # Left Sidebar (Nav)
+        self.frame_sidebar = tk.Frame(self.main_container, bg="#1E293B", width=220)
+        self.frame_sidebar.pack(side="left", fill="y")
+        self.frame_sidebar.pack_propagate(False)
+        
+        # Right Container
+        self.right_container = tk.Frame(self.main_container, bg=bg_color)
+        self.right_container.pack(side="right", fill="both", expand=True)
+        
+        # ── TOP BAR (inside right container) ──────────────────────────
+        top = ttk.Frame(self.right_container)
+        top.pack(fill="x", padx=10, pady=8)
+        
+        self._lbl_niche_icon = tk.Label(top, text="🏢", font=("Segoe UI", 16), bg="#FFFFFF")
         self._lbl_niche_icon.pack(side="left", padx=(5, 0))
         
-        tk.Label(top, text=self.lbl["niche_label"], font=("Segoe UI", 10, "bold"), bg=bg_color, fg=accent_color).pack(side="left", padx=(5, 0))
+        tk.Label(top, text=self.lbl["niche_label"], font=("Segoe UI", 10, "bold"), bg="#FFFFFF", fg=accent_color).pack(side="left", padx=(5, 0))
         self.niche_var = tk.StringVar(value="photocopy_print")
         niches = [
             "photocopy_print", "retail_grocery", "services_consulting", "clinic_pharmacy", 
@@ -122,25 +224,28 @@ class App(tk.Tk):
         self.cmb_niche = ttk.Combobox(top, textvariable=self.niche_var, values=niches, state="readonly", width=22)
         self.cmb_niche.pack(side="left", padx=6)
         self.cmb_niche.bind("<<ComboboxSelected>>", self._change_niche)
-
+        
+        self._change_niche()
+        
         # Company quick-info bar
-        co_info = ttk.Frame(top); co_info.pack(side="right", padx=8)
-        self._lbl_co = tk.Label(co_info, text="", fg="#1565C0", font=("Arial", 9, "bold"))
+        co_info = ttk.Frame(top)
+        co_info.pack(side="right", padx=8)
+        self._lbl_co = tk.Label(co_info, text="", fg=deep_blue, font=("Segoe UI", 9, "bold"), bg="#FFFFFF")
         self._lbl_co.pack(side="right")
         self._refresh_co_label()
-
-        # ── MAIN LAYOUT (PANED WINDOW) ───────────────────────
-        self.paned = ttk.PanedWindow(self, orient="horizontal")
+        
+        # ── PANED WINDOW ──
+        self.paned = ttk.PanedWindow(self.right_container, orient="horizontal")
         self.paned.pack(fill="both", expand=True, padx=8, pady=4)
         
-        # Left Panel (File Browser)
+        # Left Panel of PanedWindow (File Browser)
         self.frame_browser = ttk.Frame(self.paned)
         self.paned.add(self.frame_browser, weight=0)
         
         br_top = ttk.Frame(self.frame_browser)
         br_top.pack(fill="x")
         tk.Label(br_top, text="📁 File Browser", font=("Segoe UI", 9, "bold")).pack(side="left", padx=4, pady=4)
-        tk.Button(br_top, text="❌", command=self._toggle_browser, relief="flat").pack(side="right", padx=4)
+        tk.Button(br_top, text="❌", command=self._toggle_browser, relief="flat", bg="#FFFFFF").pack(side="right", padx=4)
         
         self.tree_files = ttk.Treeview(self.frame_browser, show="tree", selectmode="browse")
         sb_files = ttk.Scrollbar(self.frame_browser, orient="vertical", command=self.tree_files.yview)
@@ -150,19 +255,21 @@ class App(tk.Tk):
         self.tree_files.bind("<Double-1>", self._on_file_double_click)
         self._populate_file_tree()
         
-        # Right Panel (Notebook)
-        self.nb = ttk.Notebook(self.paned)
+        # Right Panel of PanedWindow (NotebookPlaceholder Container)
+        self.nb = NotebookPlaceholder(self.paned)
         self.paned.add(self.nb, weight=1)
         
         # Add toggle button to Top Bar
         self._btn_toggle_br = tk.Button(top, text="📂 Hiện File Browser", command=self._toggle_browser,
-                                        bg="#E0E0E0", fg="#333", font=("Segoe UI", 9))
+                                        bg="#E2E8F0", fg="#0F172A", font=("Segoe UI", 9), relief="flat")
         self._btn_toggle_br.pack(side="left", padx=10)
 
+        # Build subframes
         self._build_home_tab()
         self._build_ledger_tab()
         self._build_dirs_tab()
         self._build_invoice_tab()
+        self._build_invoice_history_tab()
         self._build_history_tab()
         self._build_reports_tab()
         self._build_analytics_tab()
@@ -170,17 +277,22 @@ class App(tk.Tk):
         self._build_tools_tab()
         self._build_settings_tab()
         
-        # ── STATUS BAR ───────────────────────────────────────
-        self.status_bar = tk.Frame(self, bg="#FFFFFF", bd=1, relief="sunken")
+        # Build Left Navigation Sidebar items
+        self._build_sidebar()
+        
+        # ── STATUS BAR ──
+        self.status_bar = tk.Frame(self.right_container, bg="#FFFFFF", bd=1, relief="flat")
         self.status_bar.pack(side="bottom", fill="x")
-        self.lbl_status = tk.Label(self.status_bar, text="Trạng thái: Sẵn sàng", font=("Segoe UI", 10), bg="#FFFFFF", fg="#0078D4")
+        self.lbl_status = tk.Label(self.status_bar, text="Trạng thái: Sẵn sàng", font=("Segoe UI", 10), bg="#FFFFFF", fg=accent_color)
         self.lbl_status.pack(side="left", padx=15, pady=3)
         
-        btn_help = tk.Button(self.status_bar, text="❔ Trợ giúp nhanh", command=lambda: self.nb.select(8), 
-                             bg="#F0F0F0", fg="#1565C0", font=("Segoe UI", 9, "bold"), relief="flat", padx=10)
+        btn_help = tk.Button(self.status_bar, text="❔ Trợ giúp nhanh", command=lambda: self.nb.select("🛠️"), 
+                             bg="#F1F5F9", fg=deep_blue, font=("Segoe UI", 9, "bold"), relief="flat", padx=10)
         btn_help.pack(side="right", padx=10)
         
-        tk.Label(self.status_bar, text="VN SME Ledger v2.5 Premium | 2026 Edition", font=("Segoe UI", 9), bg="#FFFFFF", fg="#888").pack(side="right", padx=15)
+        credit_status = tk.Label(self.status_bar, text="Tác giả: Du Quốc Hoàng Kim | GitHub: https://github.com/JurisSyntax", font=("Segoe UI", 9), bg="#FFFFFF", fg="#64748B")
+        credit_status.pack(side="right", padx=15)
+        credit_status.bind("<Button-3>", lambda e, w=credit_status: (self.clipboard_clear(), self.clipboard_append(w.cget("text"))))
 
         # Tab Hover Descriptions (Tooltips)
         self.tab_desc = {
@@ -204,11 +316,50 @@ class App(tk.Tk):
         self._browser_visible = True
         self._toggle_browser()
 
+        # 4. Finalize UI and bind global events
+        self._bind_global_copy_paste(self)
+        
+        # Trigger update check on startup in a background thread
+        import threading
+        def run_update():
+            if not self.settings.get("update_check_enabled", False):
+                return
+            try:
+                self.after(2000, lambda: utils.prompt_update(self))
+            except:
+                pass
+        threading.Thread(target=run_update, daemon=True).start()
+
+    def _bind_global_copy_paste(self, root_widget):
+        """Recursively bind right-click context menu and shortcuts to all text widgets."""
+        def make_menu(w):
+            menu = tk.Menu(w, tearoff=0)
+            menu.add_command(label="Sao chép (Copy)   Ctrl+C", command=lambda: w.event_generate("<<Copy>>"))
+            menu.add_command(label="Cắt (Cut)        Ctrl+X", command=lambda: w.event_generate("<<Cut>>"))
+            menu.add_command(label="Dán (Paste)      Ctrl+V", command=lambda: w.event_generate("<<Paste>>"))
+            return menu
+            
+        def show_menu(event):
+            w = event.widget
+            if isinstance(w, (tk.Entry, ttk.Combobox, tk.Text)):
+                w.focus()
+                menu = make_menu(w)
+                menu.tk_popup(event.x_root, event.y_root)
+                
+        # Bind globally for right-click
+        root_widget.bind_all("<Button-3>", show_menu)
+        
+        # Ensure default Windows shortcuts work globally on text widgets
+        root_widget.bind_all("<Control-c>", lambda e: e.widget.event_generate("<<Copy>>") if getattr(e, 'widget', None) and isinstance(e.widget, (tk.Entry, ttk.Combobox, tk.Text)) else None)
+        root_widget.bind_all("<Control-v>", lambda e: e.widget.event_generate("<<Paste>>") if getattr(e, 'widget', None) and isinstance(e.widget, (tk.Entry, ttk.Combobox, tk.Text)) else None)
+        root_widget.bind_all("<Control-x>", lambda e: e.widget.event_generate("<<Cut>>") if getattr(e, 'widget', None) and isinstance(e.widget, (tk.Entry, ttk.Combobox, tk.Text)) else None)
+
     def _on_tab_change(self, event):
         tab_id = self.nb.index("current")
         tab_name = self.nb.tab(tab_id, "text")
         utils.log_activity(f"Truy cập phân hệ: {tab_name}")
-        if tab_name == "🏠": self._update_home_metrics()
+        if tab_name and "🏠" in tab_name: self._update_home_metrics()
+        self._update_sidebar_highlight(tab_name)
 
     def _on_nb_leave(self, event):
         if self._current_tip:
@@ -326,11 +477,57 @@ class App(tk.Tk):
             try: os.startfile(fpath)
             except Exception as e: messagebox.showerror("Lỗi mở file", str(e))
 
-    def _on_tab_change(self, event):
-        tab_id = self.nb.index("current")
-        tab_name = self.nb.tab(tab_id, "text")
-        utils.log_activity(f"Truy cập phân hệ: {tab_name}")
-        if tab_name == "🏠": self._update_home_metrics()
+    def _update_sidebar_highlight(self, active_tab_name):
+        if not hasattr(self, 'sidebar_buttons'): return
+        for text, (btn, bf) in self.sidebar_buttons.items():
+            if text == active_tab_name or (active_tab_name and active_tab_name in text):
+                btn.config(bg="#00796B", fg="#FFFFFF", font=("Segoe UI", 10, "bold"))  # Đông Hồ Teal Green
+                bf.config(bg="#00796B")
+            else:
+                btn.config(bg="#1E293B", fg="#F1F5F9", font=("Segoe UI", 10, "normal"))
+                bf.config(bg="#1E293B")
+
+    def _build_sidebar(self):
+        for w in self.frame_sidebar.winfo_children():
+            w.destroy()
+
+        # Sidebar Title
+        title_lbl = tk.Label(self.frame_sidebar, text="🏢 SME LEDGER", font=("Segoe UI", 14, "bold"), fg="#F8FAFC", bg="#1E293B")
+        title_lbl.pack(pady=(20, 2), padx=10, anchor="w")
+        sub_lbl = tk.Label(self.frame_sidebar, text="Phiên bản Beta v2", font=("Segoe UI", 8, "italic"), fg="#94A3B8", bg="#1E293B")
+        sub_lbl.pack(pady=(0, 20), padx=10, anchor="w")
+
+        self.sidebar_buttons = {}
+
+        for text in self.nb.tab_names:
+            btn_frame = tk.Frame(self.frame_sidebar, bg="#1E293B")
+            btn_frame.pack(fill="x", padx=10, pady=2)
+
+            btn = tk.Button(btn_frame, text=f" {text}", font=("Segoe UI", 10),
+                            anchor="w", bg="#1E293B", fg="#F1F5F9", activebackground="#334155",
+                            activeforeground="#FFFFFF", bd=0, relief="flat", padx=15, pady=8, cursor="hand2")
+            btn.pack(fill="both", expand=True)
+
+            btn.config(command=lambda t=text: self.nb.select(t))
+            
+            # Hover effects
+            def on_enter(e, b=btn, bf=btn_frame, t=text):
+                current_active = self.nb.tab(self.nb.index("current"), "text")
+                if current_active != t:
+                    b.config(bg="#334155")
+                    bf.config(bg="#334155")
+            def on_leave(e, b=btn, bf=btn_frame, t=text):
+                current_active = self.nb.tab(self.nb.index("current"), "text")
+                if current_active != t:
+                    b.config(bg="#1E293B")
+                    bf.config(bg="#1E293B")
+                    
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+            
+            self.sidebar_buttons[text] = (btn, btn_frame)
+
+        self.nb.select(0)
 
     def _refresh_co_label(self):
         s = self.settings
@@ -365,67 +562,53 @@ class App(tk.Tk):
 
     def _build_home_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="🏠")
+        self.nb.add(tab, text=self.lbl.get("tab_home", "Trang chủ"))
         
-        # Dashboard Canvas for modern "Card" look
-        self.home_canvas = tk.Canvas(tab, bg="#F8F9FA", highlightthickness=0)
-        self.home_canvas.pack(fill="both", expand=True)
-        
-        def create_round_rect(canvas, x1, y1, x2, y2, radius=15, **kwargs):
-            points = [x1+radius, y1, x1+radius, y1, x2-radius, y1, x2-radius, y1, x2, y1, x2, y1+radius, x2, y1+radius, x2, y2-radius, x2, y2-radius, x2, y2, x2-radius, y2, x2-radius, y2, x1+radius, y2, x1+radius, y2, x1, y2, x1, y2-radius, x1, y2-radius, x1, y1+radius, x1, y1+radius, x1, y1]
-            return canvas.create_polygon(points, **kwargs, smooth=True)
-
-        # Header
-        create_round_rect(self.home_canvas, 20, 20, 1100, 140, radius=30, fill="#005A9E")
-        self.home_canvas.create_text(60, 60, text=self.lbl["dashboard_subtitle"], font=("Segoe UI", 10, "bold"), fill="#B3D7FF", anchor="w")
-        self.home_canvas.create_text(60, 95, text=self.lbl["dashboard_title"], font=("Segoe UI", 28, "bold"), fill="white", anchor="w")
-        
-        # Corporate Logo / Avatar
-        create_round_rect(self.home_canvas, 950, 40, 1070, 120, radius=20, fill="#FFFFFF")
-        self.home_canvas.create_text(1010, 80, text="🚀", font=("Segoe UI", 32))
-
-        # Metrics & Dynamic content
+        shell = ttk.Frame(tab)
+        shell.pack(fill="both", expand=True)
+        self.home_canvas = tk.Canvas(shell, bg="#F8F9FA", highlightthickness=0)
+        home_scroll = ttk.Scrollbar(shell, orient="vertical", command=self.home_canvas.yview)
+        self.home_canvas.configure(yscrollcommand=home_scroll.set)
+        self.home_canvas.pack(side="left", fill="both", expand=True)
+        home_scroll.pack(side="right", fill="y")
         self.home_dynamic_ids = []
+        self.home_shortcut_frame = None
+        self.home_canvas.bind("<Configure>", lambda _event: self._update_home_metrics())
         self._update_home_metrics()
-
-        # Shortcuts (2 Rows for compactness)
-        btn_f = tk.Frame(tab, bg="#F8F9FA")
-        self.home_canvas.create_window(470, 405, window=btn_f, anchor="nw")
-        
-        def quick_btn(f, text, cmd, color, icon):
-            b = tk.Button(f, text=f"{icon} {text}", command=cmd, bg="#FFFFFF", fg=color, 
-                          font=("Segoe UI", 8, "bold"), relief="flat", width=14, padx=5, pady=4, 
-                          highlightbackground="#EEE", highlightthickness=1, cursor="hand2")
-            b.pack(side="left", padx=3, pady=2)
-            b.bind("<Enter>", lambda e, b=b, c=color: b.config(bg=c, fg="white"))
-            b.bind("<Leave>", lambda e, b=b, c=color: b.config(bg="#FFFFFF", fg=c))
-            
-        r1 = tk.Frame(btn_f, bg="#F8F9FA"); r1.pack(side="top", anchor="w")
-        r2 = tk.Frame(btn_f, bg="#F8F9FA"); r2.pack(side="top", anchor="w")
-        
-        quick_btn(r1, "Chứng từ", lambda: self.nb.select(1), "#0078D4", "📑")
-        quick_btn(r1, "Hóa đơn", lambda: self.nb.select(3), "#FB8C00", "🧾")
-        quick_btn(r1, "Sổ cái", lambda: self.nb.select(4), "#E91E63", "🕒")
-        quick_btn(r1, "Kho hàng", lambda: self.nb.select(2), "#607D8B", "📦")
-        
-        quick_btn(r2, "Báo cáo", lambda: self.nb.select(5), "#673AB7", "📊")
-        quick_btn(r2, "Công nợ", lambda: self.nb.select(5), "#D32F2F", "💸") # Debt is sub-tab of Reports (5)
-        quick_btn(r2, "Nhân sự", lambda: self.nb.select(7), "#43A047", "👥")
-        quick_btn(r2, "Cài đặt", lambda: self.nb.select(9), "#546E7A", "⚙️")
-        self.home_canvas.config(scrollregion=(0, 0, 1150, 750))
 
     def _update_home_metrics(self):
         if not hasattr(self, 'home_canvas'): return
         c = self.home_canvas
-        
-        # Clear previous dynamic elements
-        if not hasattr(self, 'home_dynamic_ids'): self.home_dynamic_ids = []
-        for mid in self.home_dynamic_ids: c.delete(mid)
+        c.delete("all")
         self.home_dynamic_ids = []
-        
+        if getattr(self, "home_shortcut_frame", None):
+            try: self.home_shortcut_frame.destroy()
+            except Exception: pass
+            self.home_shortcut_frame = None
+        if hasattr(self, 'home_demo_btn') and self.home_demo_btn:
+            try: self.home_demo_btn.destroy()
+            except Exception: pass
+            self.home_demo_btn = None
+
         def create_round_rect(canvas, x1, y1, x2, y2, radius=15, **kwargs):
+
             points = [x1+radius, y1, x1+radius, y1, x2-radius, y1, x2-radius, y1, x2, y1, x2, y1+radius, x2, y1+radius, x2, y2-radius, x2, y2-radius, x2, y2, x2-radius, y2, x2-radius, y2, x1+radius, y2, x1+radius, y2, x1, y2, x1, y2-radius, x1, y2-radius, x1, y1+radius, x1, y1+radius, x1, y1]
             return canvas.create_polygon(points, **kwargs, smooth=True)
+
+        width = c.winfo_width() if c.winfo_width() > 100 else 1150
+        lay = dashboard_layout(width)
+        h = lay["header"]
+        create_round_rect(c, h["x"], h["y"], h["x"] + h["width"], h["y"] + h["height"], radius=28, fill="#005A9E")
+        c.create_text(h["x"] + 34, h["y"] + 38, text=self.lbl["dashboard_subtitle"], font=("Segoe UI", 10, "bold"), fill="#B3D7FF", anchor="w", width=h["width"] - 210)
+        title_font = ("Segoe UI", 24 if h["width"] < 760 else 28, "bold")
+        c.create_text(h["x"] + 34, h["y"] + 76, text=self.lbl["dashboard_title"], font=title_font, fill="white", anchor="w", width=h["width"] - 220)
+        create_round_rect(c, h["x"] + h["width"] - 138, h["y"] + 24, h["x"] + h["width"] - 34, h["y"] + 96, radius=18, fill="#FFFFFF")
+        c.create_text(h["x"] + h["width"] - 86, h["y"] + 60, text="🚀", font=("Segoe UI", 30))
+
+        if getattr(self, 'demo_active', False):
+            self.home_demo_btn = tk.Button(c, text="🔴 THOÁT CHẾ ĐỘ DEMO", command=self._exit_demo_mode,
+                                           bg="#D32F2F", fg="white", font=("Segoe UI", 9, "bold"), padx=8, pady=3, cursor="hand2")
+            c.create_window(h["x"] + h["width"] - 230, h["y"] + h["height"] - 28, window=self.home_demo_btn, anchor="center")
 
         df = db.get_flat_df(self.db)
         rev = df[df['account'].astype(str).str.startswith('511') & (df['credit'] > 0)]['credit'].sum() if not df.empty else 0
@@ -438,35 +621,61 @@ class App(tk.Tk):
             (self.lbl.get("total_profit", "LỢI NHUẬN RÒNG"), f"{profit:,.0f}", "#0D47A1", "#E3F2FD", "📈")
         ]
         
-        for i, (t, v, col, bg, ico) in enumerate(metrics):
-            x = 40 + i*360
-            rect = create_round_rect(c, x, 180, x+330, 340, radius=20, fill=bg, outline="#E0E0E0")
-            t1 = c.create_text(x+30, 215, text=ico, font=("Segoe UI", 32), fill=col, anchor="w")
-            t2 = c.create_text(x+30, 260, text=t, font=("Segoe UI", 9, "bold"), fill="#666", anchor="w")
-            t3 = c.create_text(x+30, 305, text=v + " đ", font=("Segoe UI", 20, "bold"), fill=col, anchor="w")
+        for card, (t, v, col, bg, ico) in zip(lay["metric_cards"], metrics):
+            x, y, w, hgt = card["x"], card["y"], card["width"], card["height"]
+            rect = create_round_rect(c, x, y, x+w, y+hgt, radius=20, fill=bg, outline="#E0E0E0")
+            t1 = c.create_text(x+24, y+34, text=ico, font=("Segoe UI", 28), fill=col, anchor="w")
+            t2 = c.create_text(x+24, y+76, text=t, font=("Segoe UI", 9, "bold"), fill="#666", anchor="w", width=w-48)
+            t3 = c.create_text(x+24, y+116, text=v + " đ", font=("Segoe UI", 18, "bold"), fill=col, anchor="w", width=w-48)
             self.home_dynamic_ids.extend([rect, t1, t2, t3])
 
-        # ── RECENT ACTIVITIES (Middle Box - Narrower) ────────
-        rect_act = create_round_rect(c, 40, 360, 440, 520, radius=20, fill="#FFFFFF", outline="#E0E0E0")
-        t_act = c.create_text(60, 385, text=self.lbl["recent_activities"], font=("Segoe UI", 9, "bold"), fill="#1565C0", anchor="w")
+        recent_box = lay["recent"]
+        rect_act = create_round_rect(c, recent_box["x"], recent_box["y"], recent_box["x"]+recent_box["width"], recent_box["y"]+recent_box["height"], radius=20, fill="#FFFFFF", outline="#E0E0E0")
+        t_act = c.create_text(recent_box["x"]+20, recent_box["y"]+25, text=self.lbl["recent_activities"], font=("Segoe UI", 9, "bold"), fill="#1565C0", anchor="w")
         self.home_dynamic_ids.extend([rect_act, t_act])
         
         recent = utils.get_recent_activities(5)
         if not recent: recent = ["Chưa có dữ liệu."]
         for i, act in enumerate(recent):
             clean_act = act.split("] ", 1)[1] if "] " in act else act
-            tid = c.create_text(65, 415 + i*18, text=f"• {clean_act[:40]}...", font=("Segoe UI", 8), fill="#555", anchor="w")
+            tid = c.create_text(recent_box["x"]+25, recent_box["y"]+55 + i*19, text=f"• {clean_act[:70]}", font=("Segoe UI", 8), fill="#555", anchor="w", width=recent_box["width"]-45)
             self.home_dynamic_ids.append(tid)
 
-        # ── QUICK ACCESS Label (Middle Row - Horizontal) ─────
-        t_qa = c.create_text(460, 385, text=self.lbl["quick_access"], font=("Segoe UI", 9, "bold"), fill="#555", anchor="w")
-        self.home_dynamic_ids.append(t_qa)
-        rect_qa = create_round_rect(c, 450, 360, 1100, 520, radius=20, fill="#FFFFFF", outline="#E0E0E0")
-        self.home_dynamic_ids.append(rect_qa)
+        quick_box = lay["quick"]
+        rect_qa = create_round_rect(c, quick_box["x"], quick_box["y"], quick_box["x"]+quick_box["width"], quick_box["y"]+quick_box["height"], radius=20, fill="#FFFFFF", outline="#E0E0E0")
+        t_qa = c.create_text(quick_box["x"]+20, quick_box["y"]+25, text=self.lbl["quick_access"], font=("Segoe UI", 9, "bold"), fill="#555", anchor="w")
+        self.home_dynamic_ids.extend([rect_qa, t_qa])
+        btn_f = tk.Frame(c, bg="#FFFFFF")
+        self.home_shortcut_frame = btn_f
 
-        # ── SMART REMINDERS & GUIDES (Bottom Box) ─────────────
-        rect_rem = create_round_rect(c, 40, 540, 1100, 660, radius=20, fill="#FFF9C4", outline="#FBC02D")
-        t_rem = c.create_text(60, 565, text=self.lbl["smart_reminders"], font=("Segoe UI", 10, "bold"), fill="#F57F17", anchor="w")
+        def quick_btn(parent, text, cmd, color, icon, row, col_idx):
+            b = tk.Button(parent, text=f"{icon} {text}", command=cmd, bg="#FFFFFF", fg=color,
+                          font=("Segoe UI", 8, "bold"), relief="flat", width=13, padx=4, pady=4,
+                          highlightbackground="#EEE", highlightthickness=1, cursor="hand2")
+            b.grid(row=row, column=col_idx, padx=4, pady=3, sticky="ew")
+            b.bind("<Enter>", lambda e, b=b, c=color: b.config(bg=c, fg="white"))
+            b.bind("<Leave>", lambda e, b=b, c=color: b.config(bg="#FFFFFF", fg=c))
+
+        shortcuts = [
+            ("Chứng từ", lambda: self.nb.select("📑"), "#0078D4", "📑"),
+            ("Hóa đơn", lambda: self.nb.select("🧾"), "#FB8C00", "🧾"),
+            ("Sổ cái", lambda: self.nb.select("🕒"), "#E91E63", "🕒"),
+            ("Kho hàng", lambda: self.nb.select("🗂️"), "#607D8B", "📦"),
+            ("Báo cáo", lambda: self.nb.select("📊"), "#673AB7", "📊"),
+            ("Công nợ", lambda: self.nb.select("📊"), "#D32F2F", "💸"),
+            ("Nhân sự", lambda: self.nb.select("👥"), "#43A047", "👥"),
+            ("Cài đặt", lambda: self.nb.select("⚙️"), "#546E7A", "⚙️"),
+        ]
+        btn_cols = 2 if quick_box["width"] < 520 else 4
+        for idx, (text, cmd, color, icon) in enumerate(shortcuts):
+            quick_btn(btn_f, text, cmd, color, icon, idx // btn_cols, idx % btn_cols)
+        for col_idx in range(btn_cols):
+            btn_f.grid_columnconfigure(col_idx, weight=1)
+        c.create_window(quick_box["x"]+20, quick_box["y"]+52, window=btn_f, anchor="nw")
+
+        rem_box = lay["reminders"]
+        rect_rem = create_round_rect(c, rem_box["x"], rem_box["y"], rem_box["x"]+rem_box["width"], rem_box["y"]+rem_box["height"], radius=20, fill="#FFF9C4", outline="#FBC02D")
+        t_rem = c.create_text(rem_box["x"]+20, rem_box["y"]+25, text=self.lbl["smart_reminders"], font=("Segoe UI", 10, "bold"), fill="#F57F17", anchor="w")
         self.home_dynamic_ids.extend([rect_rem, t_rem])
         
         reminders = []
@@ -484,12 +693,12 @@ class App(tk.Tk):
         if not reminders: reminders.append("• Tuyệt vời! Hệ thống của bạn đang vận hành ổn định.")
         
         for i, r in enumerate(reminders[:3]):
-            tid = c.create_text(70, 595 + i*20, text=r, font=("Segoe UI", 9), fill="#444", anchor="w")
+            tid = c.create_text(rem_box["x"]+30, rem_box["y"]+55 + i*21, text=r, font=("Segoe UI", 9), fill="#444", anchor="w", width=rem_box["width"]-60)
             self.home_dynamic_ids.append(tid)
 
-        # Footer Info
-        ft = c.create_text(1100, 680, text=f"{self.lbl['support_footer']} | {self.lbl['dashboard_title']}", font=("Segoe UI", 8), fill="#AAA", anchor="e")
+        ft = c.create_text(lay["margin"] + lay["content_width"], lay["height"] - 22, text=f"{self.lbl['support_footer']} | {self.lbl['dashboard_title']}", font=("Segoe UI", 8), fill="#AAA", anchor="e")
         self.home_dynamic_ids.append(ft)
+        c.config(scrollregion=(0, 0, lay["content_width"] + lay["margin"] * 2, lay["height"]))
 
     def _refresh_all(self):
         self._refresh_reports()
@@ -582,7 +791,7 @@ class App(tk.Tk):
 
     def _build_ledger_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="📑")
+        self.nb.add(tab, text=self.lbl.get("tab_documents", "Chứng từ"))
 
         h_hdr = ttk.Frame(tab); h_hdr.pack(fill="x")
         tk.Label(h_hdr, text="📑 LẬP CHỨNG TỪ KẾ TOÁN (TT133)", font=("Segoe UI", 11, "bold")).pack(side="left", padx=5)
@@ -801,14 +1010,19 @@ class App(tk.Tk):
 
         top = ttk.Frame(parent); top.pack(fill="x", padx=4, pady=4)
         input_cols = field_defs  # labels for entry fields (exclude pk id)
+        form_cols = 2 if len(input_cols) > 3 else len(input_cols)
         for i,(lbl,w) in enumerate(input_cols):
-            tk.Label(top, text=lbl+":").grid(row=0, column=i*2, padx=3, sticky="w")
-            e = tk.Entry(top, width=w); e.grid(row=0, column=i*2+1, padx=3)
+            row = i // form_cols
+            col = (i % form_cols) * 2
+            tk.Label(top, text=lbl+":").grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            e = tk.Entry(top, width=w)
+            e.grid(row=row, column=col+1, padx=5, pady=3, sticky="ew")
+            top.grid_columnconfigure(col+1, weight=1)
             entries.append(e)
 
         btn_save = tk.Button(top, text=self.lbl["add_btn"], width=10,
                              bg="#388E3C", fg="white")
-        btn_save.grid(row=0, column=len(input_cols)*2, padx=8)
+        btn_save.grid(row=0, column=form_cols*2, rowspan=max(1, (len(input_cols)+form_cols-1)//form_cols), padx=8, sticky="ns")
 
         bf = ttk.Frame(parent); bf.pack(fill="x", padx=4)
         tk.Button(bf, text=self.lbl["delete_btn"], bg="#C62828", fg="white",
@@ -817,14 +1031,20 @@ class App(tk.Tk):
 
         # Determine display columns (always show all db_cols)
         show_cols = list(db_cols)
-        tree = ttk.Treeview(parent, columns=show_cols, show="headings", height=12)
+        tree_wrap = ttk.Frame(parent)
+        tree_wrap.pack(fill="both", expand=True, padx=4, pady=2)
+        tree = ttk.Treeview(tree_wrap, columns=show_cols, show="headings", height=12)
         col_widths = [40] + [f[1]*6 for f in field_defs]
         for col,w2 in zip(show_cols, col_widths):
             tree.heading(col, text=col); tree.column(col, width=min(w2,200))
-        sb = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.pack(fill="both", expand=True, padx=4, side="left")
-        sb.pack(side="right", fill="y")
+        sb = ttk.Scrollbar(tree_wrap, orient="vertical", command=tree.yview)
+        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=sb.set, xscrollcommand=sb_x.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+        tree_wrap.grid_rowconfigure(0, weight=1)
+        tree_wrap.grid_columnconfigure(0, weight=1)
         setattr(self, tree_attr, tree)
 
         def _refresh():
@@ -881,14 +1101,28 @@ class App(tk.Tk):
     # ── DIRECTORIES TAB ──────────────────────────────────────
     def _build_dirs_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="🗂️")
+        self.nb.add(tab, text=self.lbl.get("tab_directories", "Danh mục"))
         sub = ttk.Notebook(tab); sub.pack(fill="both", expand=True, padx=15, pady=15)
 
-        t0 = ttk.Frame(sub); sub.add(t0, text="📖")
-        t1 = ttk.Frame(sub); sub.add(t1, text="🤝")
-        t2 = ttk.Frame(sub); sub.add(t2, text="📦")
-        t_log = ttk.Frame(sub); sub.add(t_log, text="🕒")
-        t3 = ttk.Frame(sub); sub.add(t3, text="🏗️")
+        t0 = ttk.Frame(sub)
+        lbl_t0 = "📖 Hệ thống Tài khoản" if self.settings.get("language","vi") == "vi" else "📖 Chart of Accounts"
+        sub.add(t0, text=lbl_t0)
+
+        t1 = ttk.Frame(sub)
+        lbl_t1 = "🤝 Khách hàng & Đối tác" if self.settings.get("language","vi") == "vi" else "🤝 Clients & Partners"
+        sub.add(t1, text=lbl_t1)
+
+        t2 = ttk.Frame(sub)
+        lbl_t2 = "📦 Kho hàng & Vật tư" if self.settings.get("language","vi") == "vi" else "📦 Inventory & Materials"
+        sub.add(t2, text=lbl_t2)
+
+        t_log = ttk.Frame(sub)
+        lbl_t_log = "🕒 Lịch sử Kho hàng" if self.settings.get("language","vi") == "vi" else "🕒 Inventory History"
+        sub.add(t_log, text=lbl_t_log)
+
+        t3 = ttk.Frame(sub)
+        lbl_t3 = "🏗️ Tài sản Cố định" if self.settings.get("language","vi") == "vi" else "🏗️ Fixed Assets"
+        sub.add(t3, text=lbl_t3)
         
         self._bind_sub_tips(sub, {0:"Tài khoản", 1:"Khách hàng", 2:"Kho hàng", 3:"Lịch sử Kho", 4:"Tài sản", 5:"Danh mục VSIC"})
         
@@ -921,11 +1155,16 @@ class App(tk.Tk):
         top = ttk.LabelFrame(parent, text="Thông tin Khách hàng / NCC")
         top.pack(fill="x", padx=4, pady=4)
 
-        fields = [("Tên đơn vị",26),("Mã số thuế",16),("Liên hệ",18),("Địa chỉ",32),("Tiền tệ",8),("Số lẻ",5)]
+        fields = [("Tên đơn vị/Họ tên",26),("Mã số thuế",16),("Liên hệ",18),("Địa chỉ",32),("Tiền tệ",8),("Số lẻ",5),("Loại KH",14)]
         entries = []
         for i,(lbl,w) in enumerate(fields):
             tk.Label(top, text=lbl+":").grid(row=i//3, column=(i%3)*2, padx=4, pady=2, sticky="w")
-            e = tk.Entry(top, width=w); e.grid(row=i//3, column=(i%3)*2+1, padx=4, pady=2)
+            if lbl == "Loại KH":
+                e = ttk.Combobox(top, values=["corporate", "individual"], state="readonly", width=w)
+                e.set("corporate")
+            else:
+                e = tk.Entry(top, width=w)
+            e.grid(row=i//3, column=(i%3)*2+1, padx=4, pady=2)
             entries.append(e)
 
         # Actions column
@@ -945,10 +1184,10 @@ class App(tk.Tk):
                   command=lambda: _do_del()).pack(side="left")
         tk.Label(bf, text=self.lbl["edit_hint"], fg="#1565C0").pack(side="right", padx=6)
 
-        cols = ("id","name","tax_code","contact","address","currency","currency_decimals")
+        cols = ("id","name","tax_code","contact","address","currency","currency_decimals","client_type")
         tree = ttk.Treeview(parent, columns=cols, show="headings", height=14)
-        widths2 = [35,180,110,130,200,65,55]
-        heads2  = ["ID","Tên","MST","Liên hệ","Địa chỉ","Tiền tệ","Số lẻ"]
+        widths2 = [35,180,110,130,200,65,55,90]
+        heads2  = ["ID","Tên","MST","Liên hệ","Địa chỉ","Tiền tệ","Số lẻ","Loại"]
         for c,h,w in zip(cols,heads2,widths2):
             tree.heading(c,text=h); tree.column(c,width=w)
         sb = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
@@ -972,13 +1211,15 @@ class App(tk.Tk):
         self._ref_clients = _refresh
 
         def _do_save():
-            name,tax,contact,address,cur,dec = [e.get() for e in entries]
+            name,tax,contact,address,cur,dec,client_type = [e.get() for e in entries]
             try:
                 if state['id'] is not None:
-                    db.update_client(self.db, state['id'], name, tax, contact, address, cur, int(dec or 0))
+                    db.update_client(self.db, state['id'], name, tax, contact, address, cur, int(dec or 0), client_type)
                 else:
-                    db.add_client(self.db, name, tax, contact, address, cur, int(dec or 0))
+                    db.add_client(self.db, name, tax, contact, address, cur, int(dec or 0), client_type)
                 _refresh()
+            except ClientValidationError as ex:
+                messagebox.showwarning("Thiếu dữ liệu khách hàng", str(ex))
             except Exception as ex: messagebox.showerror("Error", str(ex))
 
         btn_save.config(command=_do_save)
@@ -1020,19 +1261,23 @@ class App(tk.Tk):
         ]
         self._inv_entries = []
         inv_cats = ["Hàng hóa", "Nguyên liệu", "Công cụ", "Dịch vụ", "Thành phẩm", "Khác"]
+        inv_cols = min(3, form_column_count(1100, preferred=5))
         for i, (lbl, w) in enumerate(fields):
-            tk.Label(hdr, text=lbl, font=("Arial", 8)).grid(row=i//5*2, column=i%5, padx=5, pady=(5,0), sticky="w")
+            row = (i // inv_cols) * 2
+            col = i % inv_cols
+            tk.Label(hdr, text=lbl, font=("Arial", 8)).grid(row=row, column=col, padx=8, pady=(6,0), sticky="w")
             if i == 8: # Category
                 e = ttk.Combobox(hdr, values=inv_cats, width=w-2, font=("Segoe UI", 9))
                 e.current(0)
             else:
                 e = tk.Entry(hdr, width=w, font=("Segoe UI", 9))
                 if i == 3: e.insert(0, "1.0")
-            e.grid(row=i//5*2+1, column=i%5, padx=5, pady=(0,5), sticky="w")
+            e.grid(row=row+1, column=col, padx=8, pady=(0,6), sticky="ew")
+            hdr.grid_columnconfigure(col, weight=1)
             self._inv_entries.append(e)
             
         self._inv_state = {'id': None}
-        btn_row = ttk.Frame(hdr); btn_row.grid(row=4, column=0, columnspan=4, pady=10, sticky="w")
+        btn_row = ttk.Frame(hdr); btn_row.grid(row=((len(fields)+inv_cols-1)//inv_cols)*2, column=0, columnspan=inv_cols, pady=10, sticky="w")
         self._inv_btn = tk.Button(btn_row, text=f"➕ {self.lbl['add_btn']}", bg="#388E3C", fg="white", 
                                   font=("Segoe UI", 9, "bold"), width=18, command=self._inv_save)
         self._inv_btn.pack(side="left", padx=5)
@@ -1040,13 +1285,22 @@ class App(tk.Tk):
                   bg="#D32F2F", fg="white", font=("Segoe UI", 9)).pack(side="left", padx=5)
         
         cols = ("id","name","cat","unit","base_unit","conv","qty","cost","price","batch","min_qty")
-        self.tree_inv = ttk.Treeview(main_f, columns=cols, show="headings", height=8)
+        inv_tree_wrap = ttk.Frame(main_f)
+        inv_tree_wrap.pack(fill="both", expand=True, padx=10)
+        self.tree_inv = ttk.Treeview(inv_tree_wrap, columns=cols, show="headings", height=8)
         wds = [35, 180, 100, 100, 100, 60, 100, 100, 100, 110, 100]
         hds = ["ID","Tên hàng","Phân loại","ĐVT Hiển thị","ĐVT Cơ sở","Tỷ lệ","Tồn kho","Giá vốn","Giá bán","Số lô","Min Qty"]
         for c,h,w in zip(cols,hds,wds):
             self.tree_inv.heading(c,text=h); self.tree_inv.column(c,width=w,anchor="e" if c in ("qty","cost","price","min_qty") else "w")
         self.tree_inv.tag_configure("low_stock", background="#FFEBEE", foreground="#C62828")
-        self.tree_inv.pack(fill="both", expand=True, padx=10)
+        inv_sb_y = ttk.Scrollbar(inv_tree_wrap, orient="vertical", command=self.tree_inv.yview)
+        inv_sb_x = ttk.Scrollbar(inv_tree_wrap, orient="horizontal", command=self.tree_inv.xview)
+        self.tree_inv.configure(yscrollcommand=inv_sb_y.set, xscrollcommand=inv_sb_x.set)
+        self.tree_inv.grid(row=0, column=0, sticky="nsew")
+        inv_sb_y.grid(row=0, column=1, sticky="ns")
+        inv_sb_x.grid(row=1, column=0, sticky="ew")
+        inv_tree_wrap.grid_rowconfigure(0, weight=1)
+        inv_tree_wrap.grid_columnconfigure(0, weight=1)
         self.tree_inv.bind("<Double-1>", self._inv_edit)
 
         log_frm = ttk.LabelFrame(log_parent, text="📋 Lịch sử nhập/xuất hàng — Inventory Log")
@@ -1156,10 +1410,10 @@ class App(tk.Tk):
     def _build_invoice_tab(self):
         import invoice_gen
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="🧾")
+        self.nb.add(tab, text=self.lbl.get("tab_invoices", "Hóa đơn"))
 
         # Client selector — isolated per-client
-        cf = ttk.LabelFrame(tab, text="1. Chọn Khách hàng (Client Selection)")
+        cf = ttk.LabelFrame(tab, text="1. Chọn Khách hàng" if self.settings.get("language","vi") == "vi" else "1. Client Selection")
         cf.pack(fill="x", padx=6, pady=4)
         tk.Label(cf, text=self.lbl["client"]).pack(side="left", padx=6)
         self.cmb_inv_client = ttk.Combobox(cf, state="readonly", width=30)
@@ -1195,7 +1449,7 @@ class App(tk.Tk):
         self.ent_inv_vat.grid(row=0, column=7, padx=4)
 
         # Items table
-        lf = ttk.LabelFrame(tab, text="3. Danh sách hàng hóa / dịch vụ")
+        lf = ttk.LabelFrame(tab, text="3. Danh sách hàng hóa / dịch vụ" if self.settings.get("language","vi") == "vi" else "3. Items List")
         lf.pack(fill="both", padx=6, pady=2, expand=True)
 
         # Inventory picker row - SMART AUTO-FILL
@@ -1336,6 +1590,19 @@ class App(tk.Tk):
         inv_date = self.ent_inv_date.get()
         inv_type = self.inv_type_var.get()
         vat_rate = float(self.ent_inv_vat.get()) / 100.0
+        seller_name = s.get("company_legal_rep") or s.get("company_name", "")
+
+        try:
+            validate_invoice_payload({
+                "company_name": s.get("company_name", ""),
+                "buyer_full_name": cli.get("name", ""),
+                "seller_full_name": seller_name,
+                "address": cli.get("address", ""),
+                "items": items,
+            })
+        except InvoiceValidationError as ex:
+            messagebox.showwarning("Thiếu dữ liệu hóa đơn", str(ex))
+            return
 
         try:
             if inv_type == "01GTGT":
@@ -1345,7 +1612,8 @@ class App(tk.Tk):
                     s.get("company_tax_code",""), s.get("bank_name",""), s.get("bank_account",""),
                     cli.get("name",""), cli.get("address",""), cli.get("tax_code",""),
                     items, vat_rate=vat_rate,
-                    currency=s.get("currency","VND"), currency_decimals=int(s.get("currency_decimals",0))
+                    currency=s.get("currency","VND"), currency_decimals=int(s.get("currency_decimals",0)),
+                    settings=s
                 )
             else:
                 path, total = invoice_gen.gen_pdf_bh(
@@ -1354,7 +1622,8 @@ class App(tk.Tk):
                     s.get("company_tax_code",""), s.get("bank_name",""), s.get("bank_account",""),
                     cli.get("name",""), cli.get("address",""),
                     items, currency=s.get("currency","VND"),
-                    currency_decimals=int(s.get("currency_decimals",0))
+                    currency_decimals=int(s.get("currency_decimals",0)),
+                    settings=s
                 )
             subtotal = sum(it["qty"]*it["price"] for it in items)
             vat_amt  = subtotal * vat_rate if inv_type=="01GTGT" else 0
@@ -1377,7 +1646,7 @@ class App(tk.Tk):
     # ── INVOICE HISTORY TAB ───────────────────────────────────
     def _build_invoice_history_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="📋 Lịch sử HĐ (Inv. History)")
+        self.nb.add(tab, text=self.lbl.get("tab_history", "Lịch sử Hóa đơn"))
 
         # Filter by client
         ff = ttk.Frame(tab); ff.pack(fill="x", padx=6, pady=4)
@@ -1417,6 +1686,7 @@ class App(tk.Tk):
         self._refresh_inv_history()
 
     def _refresh_inv_history(self):
+        if not hasattr(self, 'tree_inv_hist'): return
         for i in self.tree_inv_hist.get_children(): self.tree_inv_hist.delete(i)
         # Populate client filter combo
         df_cli = db.get_clients(self.db)
@@ -1476,15 +1746,19 @@ class App(tk.Tk):
     # ── TRANSACTION HISTORY TAB ───────────────────────────────
     def _build_history_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="🕒")
+        self.nb.add(tab, text=self.lbl.get("tab_ledger", "Sổ cái"))
 
         ff = ttk.Frame(tab); ff.pack(fill="x", padx=6, pady=4)
-        tk.Label(ff, text="Tài khoản (Account):").pack(side="left", padx=4)
+        tk.Label(ff, text=self.lbl["account"]).pack(side="left", padx=4)
         self.ent_hist_acc = tk.Entry(ff, width=12); self.ent_hist_acc.pack(side="left", padx=4)
         tk.Button(ff, text="Tra cứu", command=self._refresh_history,
                   bg="#1565C0", fg="white").pack(side="left", padx=6)
         tk.Button(ff, text="Tất cả", command=self._hist_show_all).pack(side="left", padx=4)
         
+        # ADVANCED FILTER BUTTON
+        tk.Button(ff, text="🔍 Lọc Nâng Cao", command=self._open_advanced_filter,
+                  bg="#FF9800", fg="white", font=("Segoe UI", 9, "bold")).pack(side="right", padx=4)
+
         # EXCEL EXPORT BUTTON
         tk.Button(ff, text="📥 Xuất ra Excel (Export)", command=self._export_history_excel,
                   bg="#388E3C", fg="white", font=("Segoe UI", 9, "bold")).pack(side="right", padx=10)
@@ -1506,11 +1780,15 @@ class App(tk.Tk):
         self.ent_hist_acc.delete(0,"end")
         self._refresh_history()
 
-    def _refresh_history(self):
+    def _refresh_history(self, start_date=None, end_date=None):
         for i in self.tree_history.get_children(): self.tree_history.delete(i)
         acc = self.ent_hist_acc.get().strip() or None
         df = db.get_account_history_df(self.db, acc)
         if not df.empty:
+            if start_date:
+                df = df[df['date'] >= start_date]
+            if end_date:
+                df = df[df['date'] <= end_date]
             for r in df.itertuples(index=False):
                 self.tree_history.insert("","end", values=(
                     r.date, r.ref, r.note, r.type, r.account,
@@ -1518,6 +1796,32 @@ class App(tk.Tk):
                     f"{r.credit:,.0f}" if r.credit > 0 else "",
                     f"{r.running_balance:,.0f}"
                 ))
+
+    def _open_advanced_filter(self):
+        win = tk.Toplevel(self)
+        win.title("Lọc Giao Dịch Nâng Cao")
+        win.geometry("350x200")
+        win.transient(self)
+        win.grab_set()
+
+        f = ttk.Frame(win, padding=20)
+        f.pack(fill="both", expand=True)
+
+        tk.Label(f, text="Từ ngày (YYYY-MM-DD):").grid(row=0, column=0, pady=10, sticky="w")
+        ent_start = tk.Entry(f, width=15)
+        ent_start.grid(row=0, column=1, padx=10)
+
+        tk.Label(f, text="Đến ngày (YYYY-MM-DD):").grid(row=1, column=0, pady=10, sticky="w")
+        ent_end = tk.Entry(f, width=15)
+        ent_end.grid(row=1, column=1, padx=10)
+
+        def apply_filter():
+            sd = ent_start.get().strip()
+            ed = ent_end.get().strip()
+            self._refresh_history(start_date=sd, end_date=ed)
+            win.destroy()
+
+        tk.Button(f, text="Áp dụng (Apply)", command=apply_filter, bg="#1565C0", fg="white", width=15).grid(row=2, column=0, columnspan=2, pady=20)
 
     def _export_history_excel(self):
         from tkinter import filedialog
@@ -1550,19 +1854,25 @@ class App(tk.Tk):
     # ── REPORTS TAB ───────────────────────────────────────────
     def _build_reports_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="📊")
+        self.nb.add(tab, text=self.lbl.get("tab_reports", "Báo cáo"))
         sub = ttk.Notebook(tab); sub.pack(fill="both", expand=True, padx=4, pady=4)
 
         # --- B02-DNN (TT133) ---
-        t0 = ttk.Frame(sub); sub.add(t0, text="B02-DNN (TT133)")
+        t0 = ttk.Frame(sub)
+        lbl_t0 = "📊 Kết quả Kinh doanh (TT 133)" if self.settings.get("language","vi") == "vi" else "📊 Income Statement (TT 133)"
+        sub.add(t0, text=lbl_t0)
         self._build_b02_panel(t0)
 
         # --- B02-DN (TT99/2025) ---
-        t1 = ttk.Frame(sub); sub.add(t1, text="B02-DN (TT99-2025)")
+        t1 = ttk.Frame(sub)
+        lbl_t1 = "📊 Kết quả Kinh doanh (TT 99/2025)" if self.settings.get("language","vi") == "vi" else "📊 Income Statement (TT 99/2025)"
+        sub.add(t1, text=lbl_t1)
         self._build_b02_tt99_panel(t1)
 
         # --- Revenue Summary ---
-        t2 = ttk.Frame(sub); sub.add(t2, text="Tổng hợp DT")
+        t2 = ttk.Frame(sub)
+        lbl_t2 = "📈 Tổng hợp Doanh thu" if self.settings.get("language","vi") == "vi" else "📈 Revenue Summary"
+        sub.add(t2, text=lbl_t2)
         self._build_revenue_panel(t2)
 
     def _build_b02_panel(self, parent):
@@ -1760,10 +2070,10 @@ class App(tk.Tk):
         self._fill_tt99_from_data()
         self._refresh_revenue()
 
-    # ── ANALYTICS TAB ─────────────────────────────────────────
+    # ── TAB CREATION METHODS ─────────────────────────────────────────
     def _build_analytics_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="📈")
+        self.nb.add(tab, text=self.lbl.get("tab_analytics", "Phân tích"))
         try:
             analytics.build_analytics_tab(self, tab, self.db, self.settings, self.lbl)
         except Exception as e:
@@ -1774,7 +2084,7 @@ class App(tk.Tk):
 
     def _build_tools_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="🛠️")
+        self.nb.add(tab, text=self.lbl.get("tab_tools", "Công cụ"))
         sub = ttk.Notebook(tab); sub.pack(fill="both", expand=True, padx=12, pady=12)
         
         t1 = ttk.Frame(sub); tabs_extra.build_tax_calc_tab(self, sub, self.lbl)
@@ -1786,12 +2096,19 @@ class App(tk.Tk):
 
     def _build_settings_tab(self):
         tab = ttk.Frame(self.nb)
-        self.nb.add(tab, text="⚙️")
+        self.nb.add(tab, text=self.lbl.get("tab_settings", "Cài đặt"))
         canvas = tk.Canvas(tab); sb = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set); canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        inner = ttk.Frame(canvas); canvas.create_window((0,0), window=inner, anchor="nw")
+        inner = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0,0), window=inner, anchor="nw")
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        tab.bind("<Enter>", lambda _: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        tab.bind("<Leave>", lambda _: canvas.unbind_all("<MouseWheel>"))
 
         def section(title): return ttk.LabelFrame(inner, text=title)
 
@@ -1847,23 +2164,116 @@ class App(tk.Tk):
             tk.Radiobutton(lng, text=lbl_t, variable=self.lng_var, value=val).grid(
                 row=0, column=1 if val=="vi" else 2, padx=6)
 
+        # ── Offline-first / Online opt-in ─────────────────────
+        online_sec = section("🌐 Offline-first / Online opt-in")
+        online_sec.pack(fill="x", padx=10, pady=6)
+        tk.Label(
+            online_sec,
+            text="Mặc định phần mềm chạy offline. Chỉ bật từng tính năng online khi người dùng chủ động chọn.",
+            fg="#555",
+            wraplength=860,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4), sticky="w")
+        self.update_check_enabled_var = tk.BooleanVar(value=bool(self.settings.get("update_check_enabled", False)))
+        self.online_market_data_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_market_data_enabled", False)))
+        self.online_document_fetch_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_document_fetch_enabled", False)))
+        self.online_qr_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_qr_enabled", False)))
+        online_opts = [
+            ("Kiểm tra cập nhật phần mềm khi mở app", self.update_check_enabled_var),
+            ("Tải tỷ giá thị trường online trong Phân tích", self.online_market_data_enabled_var),
+            ("Cho phép cập nhật văn bản pháp luật/biểu mẫu từ nguồn online", self.online_document_fetch_enabled_var),
+            ("Tải ảnh VietQR online khi xuất hóa đơn", self.online_qr_enabled_var),
+        ]
+        for idx, (text, var) in enumerate(online_opts, start=1):
+            tk.Checkbutton(online_sec, text=text, variable=var).grid(row=idx, column=0, padx=8, pady=2, sticky="w")
+
+        # ── Cloud Sync (Supabase) ──────────────────────────────
+        cloud_title = self.lbl.get("settings_cloud_title", "ĐỒNG BỘ ĐÁM MÂY (SUPABASE)")
+        cloud_sec = section(cloud_title)
+        cloud_sec.pack(fill="x", padx=10, pady=6)
+        
+        # Checkbox to enable
+        self.cloud_sync_enabled_var = tk.BooleanVar(value=str(self.settings.get("cloud_sync_enabled", False)).lower() == 'true')
+        cb_sync = tk.Checkbutton(cloud_sec, text=self.lbl.get("settings_cloud_enable", "Bật đồng bộ đám mây:"), variable=self.cloud_sync_enabled_var)
+        cb_sync.grid(row=0, column=0, columnspan=2, padx=6, pady=3, sticky="w")
+        
+        # Supabase URL and Key
+        tk.Label(cloud_sec, text=self.lbl.get("settings_supabase_url", "Supabase URL:")).grid(row=1, column=0, padx=6, pady=3, sticky="e")
+        self.e_supabase_url = tk.Entry(cloud_sec, width=60)
+        self.e_supabase_url.insert(0, self.settings.get("supabase_url", ""))
+        self.e_supabase_url.grid(row=1, column=1, padx=6, pady=3, sticky="w")
+        
+        tk.Label(cloud_sec, text=self.lbl.get("settings_supabase_key", "Supabase Key:")).grid(row=2, column=0, padx=6, pady=3, sticky="e")
+        self.e_supabase_key = tk.Entry(cloud_sec, width=60, show="*")
+        raw_sub_key = decrypt_value(self.settings.get("supabase_key", ""))
+        self.e_supabase_key.insert(0, raw_sub_key)
+        self.e_supabase_key.grid(row=2, column=1, padx=6, pady=3, sticky="w")
+        
+        # ── AI Keys ───────────────────────────────────────────
+        ai_title = self.lbl.get("settings_ai_title", "TÀI KHOẢN TRỢ LÝ AI (CLOUD FALLBACK)")
+        ai_sec = section(ai_title)
+        ai_sec.pack(fill="x", padx=10, pady=6)
+        self.ai_online_enabled_var = tk.BooleanVar(value=bool(self.settings.get("ai_online_enabled", False)))
+        tk.Checkbutton(ai_sec, text="Bật AI online/API (mặc định tắt)", variable=self.ai_online_enabled_var).grid(row=0, column=0, columnspan=2, padx=6, pady=3, sticky="w")
+        
+        tk.Label(ai_sec, text=self.lbl.get("settings_gemini_key", "Gemini API Key:")).grid(row=1, column=0, padx=6, pady=3, sticky="e")
+        self.e_gemini_key = tk.Entry(ai_sec, width=60, show="*")
+        raw_gemini_key = decrypt_value(self.settings.get("gemini_key", ""))
+        self.e_gemini_key.insert(0, raw_gemini_key)
+        self.e_gemini_key.grid(row=1, column=1, padx=6, pady=3, sticky="w")
+        
+        tk.Label(ai_sec, text=self.lbl.get("settings_claude_key", "Claude API Key:")).grid(row=2, column=0, padx=6, pady=3, sticky="e")
+        self.e_claude_key = tk.Entry(ai_sec, width=60, show="*")
+        raw_claude_key = decrypt_value(self.settings.get("claude_key", ""))
+        self.e_claude_key.insert(0, raw_claude_key)
+        self.e_claude_key.grid(row=2, column=1, padx=6, pady=3, sticky="w")
+        
+        # Toggle keys visibility button
+        def _toggle_keys_visibility():
+            show_val = "" if self.e_supabase_key.cget("show") == "*" else "*"
+            self.e_supabase_key.config(show=show_val)
+            self.e_gemini_key.config(show=show_val)
+            self.e_claude_key.config(show=show_val)
+            btn_toggle.config(text="🙈 Ẩn Key" if show_val == "" else "👁️ " + self.lbl.get("settings_show_keys", "Hiển thị Key"))
+            
+        btn_toggle = tk.Button(ai_sec, text="👁️ " + self.lbl.get("settings_show_keys", "Hiển thị Key"), command=_toggle_keys_visibility, bg="#757575", fg="white", font=("Segoe UI", 9))
+        btn_toggle.grid(row=3, column=1, padx=6, pady=3, sticky="w")
+        
+        # Test connection button
+        def _test_cloud_connection():
+            url = self.e_supabase_url.get().strip()
+            key = self.e_supabase_key.get().strip()
+            if not url or not key:
+                messagebox.showwarning("Cảnh báo", "Vui lòng nhập Supabase URL và Key trước khi kiểm tra.")
+                return
+            from sync.cloud_connector import test_connection
+            btn_test.config(state="disabled", text="Đang kết nối...")
+            self.update()
+            try:
+                success = test_connection(url, key)
+                if success:
+                    messagebox.showinfo("Thành công", "Kết nối tới Supabase hoạt động tốt!")
+                else:
+                    messagebox.showerror("Thất bại", "Không thể kết nối. Kiểm tra URL, Key hoặc kết nối mạng.")
+            except ConnectionError:
+                messagebox.showwarning("Cảnh báo", "Đã kết nối với Supabase, nhưng các bảng dữ liệu chưa được khởi tạo.\nHãy chạy SQL Schema trong Supabase SQL Editor.")
+            except Exception as e:
+                messagebox.showerror("Lỗi", f"Lỗi: {e}")
+            finally:
+                btn_test.config(state="normal", text="🔄 " + self.lbl.get("settings_test_conn", "Kiểm tra kết nối"))
+                
+        btn_test = tk.Button(cloud_sec, text="🔄 " + self.lbl.get("settings_test_conn", "Kiểm tra kết nối"), command=_test_cloud_connection, bg="#1565C0", fg="white", font=("Segoe UI", 9))
+        btn_test.grid(row=3, column=1, padx=6, pady=3, sticky="w")
+
         # ── Save & Updates ────────────────────────────────────
         bf = ttk.Frame(inner); bf.pack(fill="x", padx=10, pady=10)
         tk.Button(bf, text="💾 Lưu cài đặt (Save Settings)", command=self._save_settings,
                   bg="#388E3C", fg="white", font=("Arial",11,"bold"), width=30).pack(side="left", padx=6)
         
         def _install_deps():
-            import subprocess, sys, threading
-            def run():
-                try:
-                    subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
-                    app.after(0, lambda: messagebox.showinfo("Cập nhật", "Đã cài đặt đủ thư viện. Vui lòng khởi động lại ứng dụng!"))
-                except Exception as e:
-                    app.after(0, lambda: messagebox.showerror("Lỗi", f"Không thể cài đặt: {e}"))
-            tk.Label(bf, text="Đang cài đặt... (Vui lòng chờ)", fg="#E65100", font=("Arial",9)).pack(side="left", padx=6)
-            threading.Thread(target=run, daemon=True).start()
+            messagebox.showinfo("Offline-only", "Chế độ offline-only: phần mềm không tự tải thư viện qua mạng. Hãy cài requirements.txt thủ công khi chạy bản source.")
             
-        tk.Button(bf, text="🔌 Tự động tải thư viện còn thiếu", command=_install_deps,
+        tk.Button(bf, text="🔌 Kiểm tra thư viện (offline)", command=_install_deps,
                   bg="#1565C0", fg="white", font=("Arial", 10), width=32).pack(side="left", padx=6)
                   
         tk.Label(bf, text="💡 Cài đặt sẽ tự áp dụng cho các tab mới.", fg="#555", font=("Arial",9)).pack(side="left", padx=10)
@@ -1872,64 +2282,160 @@ class App(tk.Tk):
         hint = section("🔍 Tra cứu Mã số thuế DN (MST Lookup Guide)")
         hint.pack(fill="x", padx=10, pady=6)
         tk.Label(hint, text=(
-            "Để tra cứu mã số thuế doanh nghiệp, truy cập:"
+            "Chế độ offline-only: phần mềm không mở website tra cứu MST tự động."
         ), justify="left", pady=4).pack(anchor="w", padx=8)
-        link_lbl = tk.Label(hint, text="https://masothue.com/",
-                            fg="#1565C0", cursor="hand2", font=("Arial",10,"underline"))
-        link_lbl.pack(anchor="w", padx=8)
-        link_lbl.bind("<Button-1>", lambda e: __import__("webbrowser").open("https://masothue.com/"))
         tk.Label(hint, text=(
-            "Hướng dẫn: Nhập tên DN hoặc MST vào ô tìm kiếm trên trang web.\n"
-            "Sau đó sao chép MST và dán vào trường 'Mã số thuế' của khách hàng/NCC."
+            "Hướng dẫn: Người dùng tự đối chiếu nguồn chính thức bên ngoài phần mềm, sau đó dán MST vào danh mục khách hàng/NCC.\n"
+            "Mọi ô nhập liệu trong phần này giữ nguyên khả năng copy-paste."
         ), justify="left", fg="#555555", wraplength=700).pack(anchor="w", padx=8, pady=4)
 
         # ── Backup & Security ─────────────────────────────────
         bk = section("🛡️ Bảo mật & Sao lưu (Security & Backup)")
         bk.pack(fill="x", padx=10, pady=6)
         
-        # --- Cloud Backup Configuration ---
+        # --- Local Backup Configuration ---
         cb = ttk.Frame(bk)
         cb.pack(fill="x", padx=10, pady=10)
         
-        tk.Label(cb, text="Phương thức sao lưu Cloud:").grid(row=0, column=0, sticky="w")
+        tk.Label(cb, text="Phương thức sao lưu:").grid(row=0, column=0, sticky="w")
         self.backup_method_var = tk.StringVar(value=self.settings.get("backup_method", "none"))
-        cmb_bm = ttk.Combobox(cb, textvariable=self.backup_method_var, values=["none", "webhook", "sftp"], state="readonly", width=15)
+        cmb_bm = ttk.Combobox(cb, textvariable=self.backup_method_var, values=["none"], state="readonly", width=15)
         cmb_bm.grid(row=0, column=1, padx=5, sticky="w")
-        
-        # Webhook URL
-        tk.Label(cb, text="Webhook URL:").grid(row=1, column=0, sticky="w", pady=2)
-        e_wh = tk.Entry(cb, width=40); e_wh.grid(row=1, column=1, columnspan=2, padx=5, sticky="w")
-        e_wh.insert(0, self.settings.get("backup_webhook_url", ""))
-        self._setting_entries["backup_webhook_url"] = e_wh
-        
-        # SFTP Host
-        tk.Label(cb, text="SFTP Host:").grid(row=2, column=0, sticky="w", pady=2)
-        e_sh = tk.Entry(cb, width=25); e_sh.grid(row=2, column=1, padx=5, sticky="w")
-        e_sh.insert(0, self.settings.get("backup_sftp_host", ""))
-        self._setting_entries["backup_sftp_host"] = e_sh
-        
-        # SFTP User/Pass
-        tk.Label(cb, text="SFTP User/Pass:").grid(row=3, column=0, sticky="w", pady=2)
-        e_su = tk.Entry(cb, width=15); e_su.grid(row=3, column=1, padx=5, sticky="w")
-        e_su.insert(0, self.settings.get("backup_sftp_user", ""))
-        self._setting_entries["backup_sftp_user"] = e_su
-        e_sp = tk.Entry(cb, width=15, show="*"); e_sp.grid(row=3, column=2, padx=5, sticky="w")
-        e_sp.insert(0, self.settings.get("backup_sftp_pass", ""))
-        self._setting_entries["backup_sftp_pass"] = e_sp
+        tk.Label(cb, text="Sao lưu luôn tạo bản local. Đồng bộ online chỉ chạy nếu bật mục Supabase ở trên.", fg="#555").grid(row=1, column=0, columnspan=3, sticky="w", pady=4)
 
         def _do_backup():
             path = utils.create_backup()
             res_cloud = sync.upload_to_cloud(path, self.settings)
-            messagebox.showinfo("Thành công", f"Đã tạo bản sao lưu dữ liệu toàn bộ!\nLưu tại: {path}\nCloud status: {res_cloud}")
-            utils.log_activity(f"Sao lưu dữ liệu: {os.path.basename(path)} | Cloud: {res_cloud}")
+            messagebox.showinfo("Thành công", f"Đã tạo bản sao lưu dữ liệu toàn bộ!\nLưu tại: {path}\nTrạng thái: {res_cloud}")
+            utils.log_activity(f"Sao lưu dữ liệu: {os.path.basename(path)} | {res_cloud}")
             
-        tk.Button(bk, text="TẠO BẢN SAO LƯU NGAY (LOCAL + CLOUD)", command=_do_backup, bg="#00796B", fg="white", font=("Segoe UI", 9, "bold"), padx=20).pack(side="right", padx=10)
+        tk.Button(bk, text="TẠO BẢN SAO LƯU CỤC BỘ", command=_do_backup, bg="#00796B", fg="white", font=("Segoe UI", 9, "bold"), padx=20).pack(side="right", padx=10)
+
+        # ── Demo Mode ─────────────────────────────────────────
+        demo_box = section("🧪 Chế độ Demo")
+        demo_box.pack(fill="x", padx=10, pady=6)
+        tk.Label(demo_box, text="Nạp dữ liệu mẫu doanh nghiệp vật tư nông nghiệp để kiểm thử phần mềm như một doanh nghiệp đang hoạt động. Log demo xoay vòng tối đa 02 file, 50KB/file.").pack(side="left", padx=10, pady=12)
+        tk.Button(demo_box, text="NẠP DEMO VẬT TƯ NÔNG NGHIỆP", command=self._load_demo_mode, bg="#6A1B9A", fg="white", font=("Segoe UI", 9, "bold"), padx=15).pack(side="right", padx=10)
+
+        # ── Author & Donate ───────────────────────────────────
+        donate = section("❤️ Ủng hộ Tác giả (Donate & Credit)")
+        donate.pack(fill="x", padx=10, pady=6)
+        d_left = tk.Frame(donate)
+        d_left.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        tk.Label(d_left, text="Phần mềm Kế toán SME Việt Nam - Mã nguồn mở 100% miễn phí.", font=("Segoe UI", 10, "bold"), fg="#1565C0").pack(anchor="w", pady=(0, 5))
+        lbl_author = tk.Label(d_left, text="Tác giả: Du Quốc Hoàng Kim\nGitHub: https://github.com/JurisSyntax", justify="left")
+        lbl_author.pack(anchor="w")
+        lbl_donate = tk.Label(d_left, text="Ủng hộ tác giả qua Vietcombank:\nSTK: 0631000472374\nChi nhánh: Tân Long An", justify="left", font=("Segoe UI", 10, "bold"), fg="#2E7D32")
+        lbl_donate.pack(anchor="w", pady=(10, 0))
+        
+        tabs_extra._add_copy_menu(lbl_author)
+        tabs_extra._add_copy_menu(lbl_donate)
+
+        # Load QR Image
+        try:
+            from PIL import Image, ImageTk
+            img_path = utils.get_resource_path("data/Vietcombank.jpg")
+            if os.path.exists(img_path):
+                img = Image.open(img_path)
+                img.thumbnail((160, 160), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                lbl_qr = tk.Label(donate, image=photo)
+                lbl_qr.image = photo # keep reference
+                lbl_qr.pack(side="right", padx=20, pady=10)
+        except ImportError:
+            tk.Label(donate, text="(Cài đặt thư viện Pillow để xem mã QR)", fg="#555").pack(side="right", padx=20)
+        except Exception as e:
+            pass
 
         # ── Danger Zone ───────────────────────────────────────
         dz = ttk.LabelFrame(inner, text="🚨 Khu vực nguy hiểm (Danger Zone)")
         dz.pack(fill="x", padx=10, pady=20)
         tk.Label(dz, text="Xóa toàn bộ dữ liệu (Ledger, Invoices, Employees) và thiết lập lại ứng dụng từ đầu.", fg="#D32F2F").pack(side="left", padx=10, pady=15)
         tk.Button(dz, text="RESET TOÀN BỘ DỮ LIỆU", command=self._factory_reset, bg="#D32F2F", fg="white", font=("Segoe UI", 9, "bold"), padx=15).pack(side="right", padx=10)
+
+    def _load_demo_mode(self):
+        if getattr(self, 'demo_active', False):
+            return messagebox.showinfo("Demo", "Bạn đang ở chế độ Demo rồi!")
+        if not messagebox.askyesno("Vào chế độ Sandbox Demo", "Chuyển sang chế độ DEMO an toàn?\n\nDữ liệu thật của bạn sẽ được bảo vệ tuyệt đối. Hệ thống sẽ tạo một cơ sở dữ liệu ảo để bạn thử nghiệm."):
+            return
+        try:
+            # Sandbox activation
+            if hasattr(self, 'db') and self.db: self.db.close()
+            demo_db_path = "data/demo_ledger.db"
+            if os.path.exists(demo_db_path): os.remove(demo_db_path)
+            self.db = db.init_db(demo_db_path)
+            self.demo_active = True
+            
+            # Seed Demo Employees
+            demo_emp_path = "data/employees_demo.json"
+            demo_ts_path = "data/timesheets_demo.json"
+            if os.path.exists(demo_emp_path): os.remove(demo_emp_path)
+            if os.path.exists(demo_ts_path): os.remove(demo_ts_path)
+            
+            demo_employees = [
+                {"code": "NV001", "name": "Nguyễn Văn Hùng", "role": "Giám đốc", "salary": "25000000", "allowance": "3000000", "dependents": "1"},
+                {"code": "NV002", "name": "Trần Thị Mai", "role": "Kế toán trưởng", "salary": "18000000", "allowance": "2000000", "dependents": "0"},
+                {"code": "NV003", "name": "Lê Hoàng Nam", "role": "Trưởng phòng Kinh doanh", "salary": "15000000", "allowance": "1500000", "dependents": "2"},
+                {"code": "NV004", "name": "Phạm Minh Đức", "role": "Nhân viên bán hàng", "salary": "8000000", "allowance": "1000000", "dependents": "0"}
+            ]
+            with open(demo_emp_path, "w", encoding="utf-8") as f:
+                json.dump(demo_employees, f, ensure_ascii=False, indent=2)
+                
+            # Seed Demo Timesheets (for current month)
+            current_month = datetime.date.today().strftime("%m/%Y")
+            demo_timesheets = [
+                {"month": current_month, "code": "NV001", "work_days": "22", "standard_hours": "208", "ot_hours": "0", "ot_approved": True, "ot_reason": "", "advance": "0"},
+                {"month": current_month, "code": "NV002", "work_days": "22", "standard_hours": "208", "ot_hours": "5", "ot_approved": True, "ot_reason": "Chốt sổ cuối tháng", "advance": "1000000"},
+                {"month": current_month, "code": "NV003", "work_days": "20", "standard_hours": "208", "ot_hours": "10", "ot_approved": True, "ot_reason": "Hỗ trợ bán hàng", "advance": "0"},
+                {"month": current_month, "code": "NV004", "work_days": "22", "standard_hours": "208", "ot_hours": "15", "ot_approved": False, "ot_reason": "Cần kiểm tra phê duyệt", "advance": "500000"}
+            ]
+            with open(demo_ts_path, "w", encoding="utf-8") as f:
+                json.dump(demo_timesheets, f, ensure_ascii=False, indent=2)
+
+            result = seed_agri_demo(self.db, DemoLogRotator("logs"))
+            # Backup original settings
+            self._real_settings = self.settings.copy()
+            self.settings.update({
+                "company_name": "Công ty TNHH Vật tư Nông nghiệp Mẫu Xanh [DEMO]",
+                "company_address": "Ấp Mẫu, xã Long An, tỉnh Long An",
+                "company_tax_code": "1100000000",
+                "company_legal_rep": "Nguyễn Văn A",
+            })
+            
+            self._show_demo_exit_button()
+            self._refresh_all()
+            self._refresh_co_label()
+            messagebox.showinfo("Demo", f"Đã vào chế độ Demo. Nhấn 'THOÁT DEMO' màu đỏ ở trên để trở về dữ liệu thật.")
+        except Exception as ex:
+            messagebox.showerror("Lỗi demo", str(ex))
+
+    def _exit_demo_mode(self):
+        if not messagebox.askyesno("Thoát Demo", "Trở về dữ liệu thật của bạn?"): return
+        try:
+            self.db.close()
+            if os.path.exists("data/demo_ledger.db"): os.remove("data/demo_ledger.db")
+            if os.path.exists("data/employees_demo.json"): os.remove("data/employees_demo.json")
+            if os.path.exists("data/timesheets_demo.json"): os.remove("data/timesheets_demo.json")
+            
+            self.db = db.init_db("data/ledger.db")
+            self.demo_active = False
+            self.settings = self._real_settings
+            
+            if hasattr(self, 'btn_demo_exit') and self.btn_demo_exit.winfo_exists():
+                self.btn_demo_exit.destroy()
+                
+            self._refresh_all()
+            self._refresh_co_label()
+            messagebox.showinfo("Thành công", "Đã trở về dữ liệu thật của bạn.")
+        except Exception as ex:
+            messagebox.showerror("Lỗi", f"Lỗi khi thoát demo: {ex}")
+            
+    def _show_demo_exit_button(self):
+        if hasattr(self, 'btn_demo_exit') and self.btn_demo_exit.winfo_exists(): return
+        self.btn_demo_exit = tk.Button(self, text="🔴 ĐANG Ở CHẾ ĐỘ DEMO - BẤM ĐỂ THOÁT", command=self._exit_demo_mode,
+                                       bg="#D32F2F", fg="white", font=("Segoe UI", 12, "bold"), relief="raised", borderwidth=4, padx=20, pady=5)
+        self.btn_demo_exit.place(relx=0.5, y=30, anchor="n")
 
     def _save_settings(self):
         for key, entry in self._setting_entries.items():
@@ -1943,6 +2449,16 @@ class App(tk.Tk):
             self.settings[key] = val
         self.settings["language"] = self.lng_var.get()
         self.settings["backup_method"] = self.backup_method_var.get()
+        self.settings["update_check_enabled"] = self.update_check_enabled_var.get()
+        self.settings["online_market_data_enabled"] = self.online_market_data_enabled_var.get()
+        self.settings["online_document_fetch_enabled"] = self.online_document_fetch_enabled_var.get()
+        self.settings["online_qr_enabled"] = self.online_qr_enabled_var.get()
+        self.settings["cloud_sync_enabled"] = self.cloud_sync_enabled_var.get()
+        self.settings["ai_online_enabled"] = self.ai_online_enabled_var.get()
+        self.settings["supabase_url"] = self.e_supabase_url.get().strip()
+        self.settings["supabase_key"] = encrypt_value(self.e_supabase_key.get().strip())
+        self.settings["gemini_key"] = encrypt_value(self.e_gemini_key.get().strip())
+        self.settings["claude_key"] = encrypt_value(self.e_claude_key.get().strip())
         config.save_settings(self.settings)
         utils.log_activity("Cập nhật cài đặt hệ thống")
         self._refresh_co_label()
@@ -1957,15 +2473,14 @@ class App(tk.Tk):
                         self.db.close()
                     except: pass
                 
-                # Delete files
-                files = ["data/ledger.db", "data/settings.json", "data/employees.json"]
-                for f in files:
-                    if os.path.exists(f): 
-                        try: os.remove(f)
-                        except Exception as e: print(f"Error deleting {f}: {e}")
-                
-                messagebox.showinfo("Hoàn tất", "Ứng dụng sẽ đóng lại. Vui lòng mở lại để bắt đầu từ đầu.")
-                self.destroy()
+                reset_to_original()
+                self.settings = config.load_settings()
+                self.lbl = config.get_labels(self.settings)
+                self.db = db.init_db("data/ledger.db")
+                self._refresh_all()
+                self._refresh_co_label()
+                messagebox.showinfo("Hoàn tất", "Đã reset dữ liệu gốc. Có thể tiếp tục sử dụng mà không cần mở lại phần mềm.")
+
 
     def _apply_language_restart(self):
         self._save_settings()
@@ -1980,6 +2495,21 @@ class App(tk.Tk):
             self.cmb_inv_client['values'] = df['name'].tolist()
         if hasattr(self, "cmb_inv_hist_client") and not df.empty:
             self.cmb_inv_hist_client['values'] = [""] + df['name'].tolist()
+
+
+def reset_to_original():
+    files = ["data/ledger.db", "data/settings.json", "data/employees.json"]
+    for f in files:
+        if os.path.exists(f): 
+            try: os.remove(f)
+            except Exception as e: print(f"Error deleting {f}: {e}")
+    # Re-initialize DB
+    import db
+    conn = db.init_db("data/ledger.db")
+    try:
+        conn.close()
+    except:
+        pass
 
 
 if __name__ == "__main__":

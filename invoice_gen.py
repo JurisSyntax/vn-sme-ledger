@@ -5,10 +5,40 @@ Hỗ trợ 2 loại hóa đơn:
   - Hóa đơn bán hàng (02BH): Hộ kinh doanh / phương pháp trực tiếp
 """
 from fpdf import FPDF
-import datetime, os
+import datetime, os, tempfile
+import requests
+import utils
 
 os.makedirs("invoices", exist_ok=True)
 os.makedirs("data", exist_ok=True)
+
+def _embed_vietqr(pdf, FONT, W, settings, amount, inv_id):
+    """
+    Fetch a VietQR image and embed it in the PDF.
+    Fails silently if offline or bank not configured.
+    """
+    try:
+        if not settings.get("online_qr_enabled", False):
+            return
+        qr_url = utils.get_vietqr_url(settings, amount, f"TT HD {inv_id}")
+        if not qr_url:
+            return
+        resp = requests.get(qr_url, timeout=8)
+        if resp.status_code != 200:
+            return
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.write(resp.content)
+        tmp.close()
+        # Place QR on the right side, next to signatures
+        pdf.ln(3)
+        pdf.set_font(FONT, "B", 8)
+        pdf.cell(W, 4, "THANH TOÁN QUA VIETQR / SCAN TO PAY:", ln=True, align="C")
+        x_pos = (210 - 45) / 2  # Center a 45mm QR on A4
+        pdf.image(tmp.name, x=x_pos, y=pdf.get_y(), w=45, h=45)
+        pdf.ln(48)
+        os.unlink(tmp.name)
+    except Exception:
+        pass  # Fail silently — invoice still valid without QR
 
 def _setup_pdf():
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -28,7 +58,8 @@ def gen_pdf_gtgt(
     seller_name, seller_address, seller_tax, seller_bank, seller_bank_acc,
     buyer_name, buyer_address, buyer_tax,
     items, vat_rate=0.10,
-    currency="VND", currency_decimals=0
+    currency="VND", currency_decimals=0,
+    settings=None
 ):
     """
     Hóa đơn GTGT — Mẫu 01/GTGT (Nghị định 123/2020/NĐ-CP)
@@ -144,11 +175,15 @@ def gen_pdf_gtgt(
     pdf.cell(W/2, 4, "____________________________", align="C")
     pdf.cell(W/2, 4, "____________________________", ln=True, align="C")
 
+    # ── VIETQR PAYMENT QR CODE ────────────────────────────
+    if settings:
+        _embed_vietqr(pdf, FONT, W, settings, grand_total, inv_id)
+
     # ── LEGAL NOTICE ──────────────────────────────────────
     pdf.ln(5)
     pdf.set_font(FONT, "I", 7)
     pdf.set_text_color(150, 150, 150)
-    pdf.multi_cell(W, 4, "⚠ Đây là hóa đơn thương mại nội bộ. Để nộp thuế điện tử, xuất file XLSX và upload lên Cổng thông tin điện tử của Tổng Cục Thuế (https://hoadondientu.gdt.gov.vn). "
+    pdf.multi_cell(W, 4, "⚠ Đây là hóa đơn thương mại nội bộ. Để nộp thuế điện tử, hãy xuất dữ liệu theo định dạng yêu cầu và tự nộp qua hệ thống chính thức bên ngoài phần mềm. "
                          "Hóa đơn lập theo Nghị định 123/2020/NĐ-CP và Thông tư 78/2021/TT-BTC.")
 
     path = f"invoices/HDGTGT_{inv_id}.pdf"
@@ -160,7 +195,8 @@ def gen_pdf_bh(
     inv_id, date,
     seller_name, seller_address, seller_tax, seller_bank, seller_bank_acc,
     buyer_name, buyer_address,
-    items, currency="VND", currency_decimals=0
+    items, currency="VND", currency_decimals=0,
+    settings=None
 ):
     """
     Hóa đơn bán hàng — Mẫu 02/BH
@@ -252,6 +288,10 @@ def gen_pdf_bh(
     pdf.ln(12)
     pdf.cell(W/2, 4, "____________________________", align="C")
     pdf.cell(W/2, 4, "____________________________", ln=True, align="C")
+
+    # ── VIETQR PAYMENT QR CODE ────────────────────────────
+    if settings:
+        _embed_vietqr(pdf, FONT, W, settings, total, inv_id)
 
     pdf.ln(5)
     pdf.set_font(FONT, "I", 7)

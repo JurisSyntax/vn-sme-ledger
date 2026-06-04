@@ -1,11 +1,12 @@
-import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import db, tax_engine, market_data
 import os, subprocess, tkinter as tk
 from tkinter import ttk
 
 def run_dashboard(conn):
+    import pandas as pd
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
     df = db.get_flat_df(conn)
     if df.empty:
         raise ValueError("Không có dữ liệu. Nhập chứng từ trước!\n(No data — post transactions first!)")
@@ -104,6 +105,7 @@ def run_dashboard(conn):
 
 def build_analytics_tab(app, tab, conn, settings, lbl):
     """Build the in-app Analytics tab widget (called from main.py)."""
+    import pandas as pd
     lang = settings.get("language", "vi")
 
     # Summary cards frame
@@ -180,11 +182,11 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
             import matplotlib.pyplot as plt
             
-            # Create a figure with a 2x2 layout
-            fig = Figure(figsize=(12, 8), dpi=100, facecolor='#FFFFFF')
+            # Create a figure with a 3x2 layout
+            fig = Figure(figsize=(12, 12), dpi=100, facecolor='#FFFFFF')
             
             # 1. Pie Chart: Revenue Structure (Top Left)
-            ax1 = fig.add_subplot(221)
+            ax1 = fig.add_subplot(321)
             if not rev_entries.empty:
                 sources = rev_entries.groupby('note')['credit'].sum()
                 ax1.pie(sources, labels=sources.index, autopct='%1.1f%%', startangle=140, 
@@ -195,7 +197,7 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
                 ax1.axis('off')
 
             # 2. Bar Chart: Monthly Trends (Top Right)
-            ax2 = fig.add_subplot(222)
+            ax2 = fig.add_subplot(322)
             sum_df = db.get_revenue_summary(conn, period="month").sort_values("period").tail(6)
             if not sum_df.empty:
                 x = range(len(sum_df))
@@ -211,8 +213,8 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
                 ax2.text(0.5, 0.5, "Chưa có dữ liệu xu hướng", ha='center', va='center')
                 ax2.axis('off')
 
-            # 3. Cash Flow Forecast (Bottom Left/Span)
-            ax3 = fig.add_subplot(212) # Span across the bottom
+            # 3. Cash Flow Forecast (Bottom Span)
+            ax3 = fig.add_subplot(313) # Span across the bottom
             cf_data = db.get_account_history_df(conn, "11") # Cash & Bank
             if not cf_data.empty:
                 cf_data['date'] = pd.to_datetime(cf_data['date'])
@@ -240,6 +242,38 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
                 ax3.text(0.5, 0.5, "Chưa có dữ liệu dòng tiền", ha='center', va='center')
                 ax3.axis('off')
 
+            # 4. AR/AP Aging (Middle Left)
+            ax4 = fig.add_subplot(323)
+            try:
+                from core.ar_ap import get_aging_report
+                ar_df = get_aging_report(conn, "131")
+                if not ar_df.empty:
+                    aging_sums = ar_df[['current', '0-30', '31-60', '61-90', '90+']].sum()
+                    ax4.bar(aging_sums.index, aging_sums.values, color='#FF9800')
+                    ax4.set_title("Tuổi nợ Phải thu (AR Aging)", fontsize=10, fontweight='bold', color='#1565C0')
+                else:
+                    ax4.text(0.5, 0.5, "Không có nợ", ha='center', va='center')
+                    ax4.axis('off')
+            except Exception as e:
+                ax4.text(0.5, 0.5, f"Lỗi: {e}", ha='center', va='center')
+                ax4.axis('off')
+
+            # 5. Inventory Summary (Middle Right)
+            ax5 = fig.add_subplot(324)
+            try:
+                inv_df = pd.read_sql("SELECT name, qty, cost FROM inventory WHERE qty > 0", conn)
+                if not inv_df.empty:
+                    inv_df['total_val'] = inv_df['qty'] * inv_df['cost']
+                    top_inv = inv_df.sort_values('total_val', ascending=False).head(5)
+                    ax5.barh(top_inv['name'].str[:15], top_inv['total_val'], color='#26A69A')
+                    ax5.set_title("Tồn kho (Top 5)", fontsize=10, fontweight='bold', color='#1565C0')
+                else:
+                    ax5.text(0.5, 0.5, "Kho trống", ha='center', va='center')
+                    ax5.axis('off')
+            except Exception as e:
+                ax5.text(0.5, 0.5, f"Lỗi: {e}", ha='center', va='center')
+                ax5.axis('off')
+
             fig.tight_layout()
             canvas_mtl = FigureCanvasTkAgg(fig, master=chart_frame)
             canvas_mtl.draw()
@@ -264,7 +298,7 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
         mkt_txt.insert("end", "⏳ Đang tải dữ liệu thị trường...\n")
         mkt_txt.config(state="disabled"); tab.update_idletasks()
         try:
-            rates = market_data.get_exchange_rates()
+            rates = market_data.get_exchange_rates(settings.get("currency", "VND"), settings.get("online_market_data_enabled", False))
             cpi   = market_data.get_cpi_data()
             lines = [f"📅 Tỷ giá ngày {rates.get('_date','N/A')} (Nguồn: {rates.get('_source','')})"]
             for k in ["VND","EUR","JPY","CNY","SGD"]:

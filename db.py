@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sqlite3, pandas as pd
 import os
 from datetime import datetime
@@ -26,9 +28,12 @@ TT133_ACCOUNTS = [
 ]
 
 def init_db(path="data/ledger.db"):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
 
     conn.executescript('''
     CREATE TABLE IF NOT EXISTS accounts (code TEXT PRIMARY KEY, name TEXT, type TEXT);
@@ -40,7 +45,26 @@ def init_db(path="data/ledger.db"):
         contact TEXT,
         address TEXT DEFAULT "",
         currency TEXT DEFAULT "VND",
-        currency_decimals INTEGER DEFAULT 0
+        currency_decimals INTEGER DEFAULT 0,
+        client_type TEXT DEFAULT "corporate" CHECK(client_type IN ('individual','corporate'))
+    );
+
+    CREATE TABLE IF NOT EXISTS individual_customers (
+        client_id INTEGER PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        personal_id TEXT DEFAULT "",
+        address TEXT NOT NULL,
+        phone TEXT DEFAULT "",
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS corporate_customers (
+        client_id INTEGER PRIMARY KEY,
+        company_name TEXT NOT NULL,
+        tax_code TEXT NOT NULL,
+        address TEXT NOT NULL,
+        contact_person TEXT DEFAULT "",
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS journal_entries (
@@ -50,6 +74,7 @@ def init_db(path="data/ledger.db"):
         note TEXT,
         type TEXT,
         client_id INTEGER DEFAULT NULL,
+        audit_hash TEXT DEFAULT "",
         created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS journal_lines (
@@ -103,6 +128,18 @@ def init_db(path="data/ledger.db"):
         created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     );
+
+    CREATE TABLE IF NOT EXISTS employee_ledger (
+        id INTEGER PRIMARY KEY,
+        employee_code TEXT NOT NULL,
+        employee_name TEXT NOT NULL,
+        salary_year INTEGER NOT NULL,
+        base_salary REAL NOT NULL,
+        allowance REAL DEFAULT 0,
+        union_due REAL DEFAULT 0,
+        compliance_status TEXT DEFAULT "",
+        created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
+    );
     ''')
     conn.commit()
 
@@ -117,6 +154,8 @@ def init_db(path="data/ledger.db"):
         "ALTER TABLE inventory ADD COLUMN conv_factor REAL DEFAULT 1.0",
         "ALTER TABLE inventory ADD COLUMN batch_no TEXT DEFAULT ''",
         "ALTER TABLE inventory ADD COLUMN min_qty REAL DEFAULT 0.0",
+        "ALTER TABLE clients ADD COLUMN client_type TEXT DEFAULT 'corporate'",
+        "ALTER TABLE journal_entries ADD COLUMN audit_hash TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try: conn.execute(sql); conn.commit()
@@ -130,6 +169,18 @@ def init_db(path="data/ledger.db"):
         conn.commit()
 
     return conn
+
+def _audit_hash(date, ref, note, lines, tx_type="", client_id=None):
+    payload = {
+        "date": date,
+        "ref": ref,
+        "note": note,
+        "type": tx_type,
+        "client_id": client_id,
+        "lines": [(str(a), float(d), float(c)) for a, d, c in lines],
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 # ── Accounts ────────────────────────────────────────────────
 def add_account(conn, code, name, acc_type):
@@ -153,8 +204,9 @@ def post_entry(conn, date, ref, note, lines, tx_type="", client_id=None):
     _check_balanced(lines)
     cur = conn.cursor()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("INSERT INTO journal_entries(date,ref,note,type,client_id,created_at) VALUES (?,?,?,?,?,?)",
-                (date, ref, note, tx_type, client_id, ts))
+    ahash = _audit_hash(date, ref, note, lines, tx_type, client_id)
+    cur.execute("INSERT INTO journal_entries(date,ref,note,type,client_id,audit_hash,created_at) VALUES (?,?,?,?,?,?,?)",
+                (date, ref, note, tx_type, client_id, ahash, ts))
     eid = cur.lastrowid
     cur.executemany("INSERT INTO journal_lines VALUES (NULL,?,?,?,?)",
                     [(eid, *l) for l in lines])
@@ -164,9 +216,10 @@ def post_entry(conn, date, ref, note, lines, tx_type="", client_id=None):
 def update_entry(conn, entry_id, date, ref, note, lines, tx_type="", client_id=None):
     _check_balanced(lines)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ahash = _audit_hash(date, ref, note, lines, tx_type, client_id)
     conn.execute(
-        "UPDATE journal_entries SET date=?, ref=?, note=?, type=?, client_id=?, created_at=? WHERE id=?",
-        (date, ref, note, tx_type, client_id, ts, entry_id)
+        "UPDATE journal_entries SET date=?, ref=?, note=?, type=?, client_id=?, audit_hash=?, created_at=? WHERE id=?",
+        (date, ref, note, tx_type, client_id, ahash, ts, entry_id)
     )
     conn.execute("DELETE FROM journal_lines WHERE entry_id=?", (entry_id,))
     conn.executemany("INSERT INTO journal_lines VALUES (NULL,?,?,?,?)",
@@ -228,16 +281,70 @@ def get_account_history_df(conn, account_prefix=None):
     return df
 
 # ── Clients ──────────────────────────────────────────────────
-def add_client(conn, name, tax_code, contact, address="", currency="VND", currency_decimals=0):
-    conn.execute("INSERT INTO clients VALUES (NULL,?,?,?,?,?,?)",
-                 (name, tax_code, contact, address, currency, currency_decimals))
-    conn.commit()
+def add_client(conn, name, tax_code, contact, address="", currency="VND", currency_decimals=0, client_type="corporate"):
+    from core.validation import validate_client_payload
 
-def update_client(conn, client_id, name, tax_code, contact, address="", currency="VND", currency_decimals=0):
-    conn.execute(
-        "UPDATE clients SET name=?, tax_code=?, contact=?, address=?, currency=?, currency_decimals=? WHERE id=?",
-        (name, tax_code, contact, address, currency, currency_decimals, client_id)
+    cleaned = validate_client_payload({
+        "name": name,
+        "tax_code": tax_code,
+        "contact": contact,
+        "address": address,
+        "currency": currency,
+        "currency_decimals": currency_decimals,
+        "client_type": client_type,
+    })
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO clients (name,tax_code,contact,address,currency,currency_decimals,client_type)
+           VALUES (?,?,?,?,?,?,?)""",
+        (cleaned["name"], cleaned["tax_code"], contact, cleaned["address"], currency, currency_decimals, cleaned["client_type"])
     )
+    client_id = cur.lastrowid
+    if cleaned["client_type"] == "individual":
+        cur.execute(
+            """INSERT OR REPLACE INTO individual_customers
+               (client_id,full_name,address,phone) VALUES (?,?,?,?)""",
+            (client_id, cleaned["name"], cleaned["address"], contact or ""),
+        )
+    else:
+        cur.execute(
+            """INSERT OR REPLACE INTO corporate_customers
+               (client_id,company_name,tax_code,address,contact_person) VALUES (?,?,?,?,?)""",
+            (client_id, cleaned["name"], cleaned["tax_code"], cleaned["address"], contact or ""),
+        )
+    conn.commit()
+    return client_id
+
+def update_client(conn, client_id, name, tax_code, contact, address="", currency="VND", currency_decimals=0, client_type="corporate"):
+    from core.validation import validate_client_payload
+
+    cleaned = validate_client_payload({
+        "name": name,
+        "tax_code": tax_code,
+        "contact": contact,
+        "address": address,
+        "currency": currency,
+        "currency_decimals": currency_decimals,
+        "client_type": client_type,
+    })
+    conn.execute(
+        "UPDATE clients SET name=?, tax_code=?, contact=?, address=?, currency=?, currency_decimals=?, client_type=? WHERE id=?",
+        (cleaned["name"], cleaned["tax_code"], contact, cleaned["address"], currency, currency_decimals, cleaned["client_type"], client_id)
+    )
+    conn.execute("DELETE FROM individual_customers WHERE client_id=?", (client_id,))
+    conn.execute("DELETE FROM corporate_customers WHERE client_id=?", (client_id,))
+    if cleaned["client_type"] == "individual":
+        conn.execute(
+            """INSERT INTO individual_customers (client_id,full_name,address,phone)
+               VALUES (?,?,?,?)""",
+            (client_id, cleaned["name"], cleaned["address"], contact or ""),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO corporate_customers (client_id,company_name,tax_code,address,contact_person)
+               VALUES (?,?,?,?,?)""",
+            (client_id, cleaned["name"], cleaned["tax_code"], cleaned["address"], contact or ""),
+        )
     conn.commit()
 
 def get_clients(conn):
@@ -338,12 +445,23 @@ def next_invoice_number(conn, inv_type="01GTGT"):
     return f"{prefix}-{seq:04d}"
 
 def save_invoice(conn, inv_number, inv_type, client_id, date, items_json, subtotal, vat, total, pdf_path):
+    cur = conn.cursor()
+    cur.execute("SELECT name, address FROM clients WHERE id=?", (client_id,))
+    row = cur.fetchone()
+    if row:
+        from core.validation import validate_invoice_payload
+        validate_invoice_payload({
+            "company_name": "LOCAL_COMPANY_VALIDATED_BY_UI",
+            "buyer_full_name": row[0],
+            "seller_full_name": "LOCAL_SELLER_VALIDATED_BY_UI",
+            "address": row[1],
+            "items": json.loads(items_json),
+        })
     conn.execute("""INSERT INTO invoices (inv_number, inv_type, client_id, date, items_json,
                     subtotal, vat, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)""",
                  (inv_number, inv_type, client_id, date, items_json, subtotal, vat, total, pdf_path))
     
     # --- Sync Stock ---
-    import json
     items = json.loads(items_json)
     for it in items:
         # Try to find item in inventory by name
