@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='VN_SME_Ledger_PyQt6',
+    name='VN_SME_Ledger_Beta_v6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

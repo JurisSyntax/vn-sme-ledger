@@ -7,6 +7,7 @@ from ai.memory_profile import ProfileLimitError, ProfileStore
 from core import legal_vault
 from core.hr_compliance import payroll_snapshot
 from core.payroll import calculate_monthly_payroll
+from core.encryption import decrypt_value, encrypt_value
 
 # ── Human-readable niche display names ─────────────────────
 NICHE_NAMES = {
@@ -416,7 +417,7 @@ def build_ai_tab(app, nb, lbl):
     tk.Label(cfg_f, text="Nền tảng:", bg="#F0F4F8").pack(side="left", padx=5)
     
     provider_var = tk.StringVar(value=app.settings.get("ai_provider", "offline"))
-    cmb_prov = ttk.Combobox(cfg_f, textvariable=provider_var, values=["offline", "api", "ollama"], state="readonly", width=10)
+    cmb_prov = ttk.Combobox(cfg_f, textvariable=provider_var, values=["offline", "ollama", "groq", "huggingface", "custom", "gemini", "claude", "api"], state="readonly", width=12)
     cmb_prov.pack(side="left", padx=5)
     
     tk.Label(cfg_f, text="Model:", bg="#F0F4F8").pack(side="left", padx=5)
@@ -424,14 +425,21 @@ def build_ai_tab(app, nb, lbl):
     tk.Entry(cfg_f, textvariable=model_var, width=20).pack(side="left", padx=5)
     
     tk.Label(cfg_f, text="API Key (Nếu dùng API):", bg="#F0F4F8").pack(side="left", padx=5)
-    api_key_var = tk.StringVar(value=app.settings.get("ai_api_key", ""))
+    raw_api_key = str(app.settings.get("ai_api_key", ""))
+    api_key_var = tk.StringVar(value=decrypt_value(raw_api_key) or raw_api_key)
     tk.Entry(cfg_f, textvariable=api_key_var, width=30, show="*").pack(side="left", padx=5)
+
+    endpoint_f = tk.Frame(main_f, bg="#F0F4F8", bd=1, relief="solid"); endpoint_f.pack(fill="x", padx=10, pady=2)
+    tk.Label(endpoint_f, text="Custom AI Base URL:", bg="#F0F4F8").pack(side="left", padx=5)
+    endpoint_var = tk.StringVar(value=app.settings.get("ai_base_url", ""))
+    tk.Entry(endpoint_f, textvariable=endpoint_var, width=62).pack(side="left", padx=5, fill="x", expand=True)
     
     def _save_ai_cfg():
         app.settings["ai_online_enabled"] = ai_online_var.get()
         app.settings["ai_provider"] = provider_var.get()
         app.settings["ai_model"] = model_var.get()
-        app.settings["ai_api_key"] = api_key_var.get()
+        app.settings["ai_api_key"] = encrypt_value(api_key_var.get().strip())
+        app.settings["ai_base_url"] = endpoint_var.get().strip()
         import config
         config.save_settings(app.settings)
         messagebox.showinfo("Lưu", "Đã lưu cấu hình AI!")

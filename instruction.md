@@ -8,9 +8,9 @@ Your job is to self-check the app, detect defects, patch only the smallest relat
 Default product policy: **offline-first, online opt-in**. The app must work locally by default. Network/cloud behavior is allowed only when the user explicitly enables that specific feature in Settings or in the feature screen.
 
 ## App Reality
-This project is a local Windows desktop app, not a PyQt app.
+This project is a local Windows desktop app with two maintained UI paths. The release path is PyQt6 (`main_qt.py`); the stable/legacy path is Tkinter (`main.py`). Keep both paths compatible when changing shared settings or backend behavior.
 
-- UI framework: Tkinter / ttk, with `Tk`, `Toplevel`, `Notebook`, `Treeview`, `Entry`, `Text`, and message boxes.
+- UI frameworks: PyQt6 release UI with `QMainWindow`, `QTabWidget`, `QTableWidget`, `QLineEdit`, `QTextEdit`, and dialogs; Tkinter/ttk compatibility UI with `Tk`, `Toplevel`, `Notebook`, `Treeview`, `Entry`, and `Text`.
 - Database: SQLite via `db.py`.
 - Main entrypoint: `main.py`.
 - Extra tabs and tools: `tabs_extra.py`.
@@ -20,7 +20,7 @@ This project is a local Windows desktop app, not a PyQt app.
 - Backup/sync behavior: `sync/`.
 - Tests: `pytest`, `test_startup.py`, `test_backend.py`.
 
-Do not write PyQt-only checks such as `QDialog`, `QLineEdit`, `QTextEdit`, or `setModal(True)` unless the app has actually migrated to PyQt.
+Do not assume one UI path proves the other works. Use the matching widget checks for the path being tested, and run both startup smoke tests where possible.
 
 ## Required Verification Sequence
 Run these commands from:
@@ -35,6 +35,8 @@ Use the project venv:
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe test_startup.py
 .venv\Scripts\python.exe test_backend.py
+.venv\Scripts\python.exe test_startup_qt.py
+.venv\Scripts\python.exe -m pytest tests\test_online_integrations.py tests\test_option1_stabilization.py -q
 .venv\Scripts\python.exe -m py_compile main.py tabs_extra.py db.py sync\__init__.py ai\llm_worker.py core\validation.py core\legal_vault.py demo\simulator.py
 ```
 
@@ -49,6 +51,7 @@ Expected baseline:
 
 - All tests pass.
 - App startup prints `SUCCESS`.
+- PyQt startup prints `SUCCESS` and every failed tab is treated as a defect, not accepted as a placeholder.
 - Backend smoke test prints `Backend test PASSED`.
 - `py_compile` exits with code `0`.
 - Any network/cloud/API match is fully disabled by default, explicitly documented as opt-in, and covered by tests or smoke checks.
@@ -75,7 +78,9 @@ Primary files:
 - Max profile count is 3.
 - At least one default profile exists for SME, household business, freelancer, tax, accounting, ledger, and debt.
 - Cloud/API model calls must not happen unless the user explicitly enabled an opt-in mode.
-- If strict offline is active, remove or disable calls to Gemini, Claude, Groq, Ollama HTTP endpoints, or other network APIs.
+- Strict offline means no cloud call. Local Ollama is permitted only through loopback (`localhost`/`127.0.0.1`) and must never be treated as a cloud service.
+- Online providers must be selected explicitly (`Groq`, `Hugging Face`, `Custom`, `Gemini`, or `Claude`) and require the AI online checkbox.
+- API keys must be encrypted at rest, never written to logs, and must be read with backward-compatible decryption for older settings files.
 
 Primary files:
 
@@ -151,6 +156,15 @@ Primary files:
 - Important labels such as author, donate, legal basis, file paths, and generated reports must be copyable.
 - Tree/table values should be copyable through row selection or context menu if users need to reuse them.
 
+### 9. Online Integrations
+- `core/online_integrations.py` is the only shared gateway for exchange-rate, OCR, and embedding calls.
+- Exchange rates use local defaults/cache when `online_market_data_enabled` is false.
+- OCR requires `online_ocr_enabled`; it must show a clear local/offline message instead of making a request.
+- Jina embeddings require `online_embeddings_enabled`; empty text must be rejected locally.
+- All online requests need finite timeouts, explicit HTTPS endpoints, structured failure messages, and no upload of the full accounting database.
+- `ui/tools_tab.py` must expose real controls for exchange-rate check, OCR file selection, and AI prompt execution. A feature is not complete if it exists only as a backend helper.
+- Online actions must not run during app startup and should not silently alter accounting records.
+
 Primary files:
 
 - `main.py`
@@ -180,6 +194,8 @@ Known high-risk current areas to inspect first:
 - `utils/auto_updater.py` may check GitHub on startup.
 - `data/gov_doc_scraper.py` may scrape government websites.
 - `main.py` may expose Supabase, Gemini, Claude, or API key controls even when strict offline is expected.
+- `core/online_integrations.py` may expose OCR.Space, Frankfurter, or Jina calls without a feature-specific opt-in.
+- `ui/settings_tab.py` may save API keys as plaintext or omit a newly added online flag.
 
 Allowed opt-in examples:
 
@@ -191,6 +207,13 @@ Allowed opt-in examples:
 - remote VietQR image fetch for invoice PDFs
 
 Each allowed online feature must have a default-off setting and a local fallback message. If a network feature cannot be made explicit opt-in, replace it with a local fallback and test that no network call is used by default.
+
+## Modern 2026 Readiness Checks
+- Use a supported Python 3 runtime and the pinned project virtual environment.
+- Prefer parameterized SQLite queries, foreign-key enforcement, WAL mode, atomic local settings writes, and deterministic local fallbacks.
+- Treat every external response as untrusted input; cap prompt/file sizes, validate custom URLs, use timeouts, and avoid exposing secrets in exception text or logs.
+- Keep the UI usable on a 1280x720 window and on a smaller laptop window: no clipped primary controls, overlapping dashboard content, or network calls that block the main event loop without a clear busy state.
+- Do not claim current Vietnamese legal/tax coverage from a static file without recording its source and verified-through date.
 
 ## Autonomous Fix Loop
 Use this loop for every failure.
@@ -270,6 +293,20 @@ If everything passes, include the exact passing evidence, for example:
 .venv\Scripts\python.exe test_startup.py -> SUCCESS
 .venv\Scripts\python.exe test_backend.py -> Backend test PASSED
 py_compile -> exit 0
+
+## Beta v6 continuation checks (2026-07-20)
+
+When reviewing the current release, also verify the following integration contracts:
+
+- The visible in-app release label is `Beta v6`; the normal PyQt6 artifact remains `dist\VN_SME_Ledger_PyQt6.exe` and the Tkinter compatibility artifact is `dist\VN_SME_Ledger_Stable.exe`. Do not create a standalone Beta executable unless explicitly requested.
+- Use `main_qt.VnSmeLedgerApp.tab_indices` and `go_to_tab()` for cross-feature navigation. Do not reintroduce hard-coded top-level tab numbers in dashboard shortcuts or tests.
+- Dashboard metrics must include revenue accounts 511/515 and expense accounts 632/635/641/642/811. Verify that a stock invoice changes both inventory and COGS-related metrics.
+- Invoice creation must use the atomic `db.save_invoice(..., auto_post=True)` path in both UI implementations. Verify that invoice persistence, stock deduction, revenue/VAT posting, and COGS/inventory posting either all commit or all roll back.
+- The English locale is `locales\en_US.json`. Test both `vi_VN` and `en_US` startup modes; assert tab wiring by semantic key rather than translated tab text.
+- The in-app AI assistant must receive bounded local context and remain offline/local unless the user explicitly enables an online provider. Never treat a successful UI response as proof that an API call is permitted.
+- Accounting periods must be checked through `db.assert_period_open(...)` before posting, editing, deleting, saving invoices, or moving inventory. A closed period must remain immutable; corrections use `db.reverse_entry(...)` or an approved adjustment in an open period.
+- AI-generated journal data is advisory only. Validate typed proposals with `ai.proposals.validate_journal_proposal(...)`, show the debit/credit preview and warnings, and require an explicit human approval before calling `approve_journal_proposal(...)`. Never let free-form AI text or unrestricted SQL write to the ledger.
+- Final release gate: `.venv\Scripts\python.exe -m pytest -q`, `test_startup.py`, `test_startup_qt.py`, `test_backend.py`, and `RUN_EXE_TESTS=1 .venv\Scripts\python.exe -m pytest test_exe.py -q`.
 ```
 
 Do not say the app is ready unless these checks were run fresh and passed.

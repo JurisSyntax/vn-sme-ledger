@@ -1,7 +1,12 @@
 import json, os, sys
 
+APP_NAME = "VN SME Ledger"
+APP_VERSION = "Beta v6"
+APP_DISPLAY_NAME = f"{APP_NAME} ({APP_VERSION})"
+
 DEFAULT_SETTINGS = {
     "language": "vi",
+    "country_code": "VN",
     "currency": "VND",
     "currency_decimals": 0,
     "company_name": "",
@@ -21,16 +26,25 @@ DEFAULT_SETTINGS = {
     "cloud_sync_enabled": False,
     "update_check_enabled": False,
     "online_market_data_enabled": False,
+    "exchange_rate_provider": "frankfurter",
     "online_document_fetch_enabled": False,
     "online_qr_enabled": False,
+    "online_ocr_enabled": False,
+    "ocr_provider": "ocr_space",
+    "ocr_api_key": "",
+    "online_embeddings_enabled": False,
+    "jina_api_key": "",
+    "jina_embedding_model": "jina-embeddings-v3",
     "supabase_url": "",
     "supabase_key": "",
     "ai_online_enabled": False,
     "ai_provider": "offline",
     "ai_model": "llama3-8b-8192",
     "ai_api_key": "",
+    "ai_base_url": "",
     "gemini_key": "",
     "claude_key": "",
+    "invoice_series": "AA/26E",
 }
 
 NAPAS_BANKS = {
@@ -113,7 +127,7 @@ LABELS = {
         "settings_bank_acc": "Số tài khoản:",
         "settings_inv_type": "Loại hóa đơn:",
         "settings_save": "Lưu cài đặt (Save)",
-        "dashboard_title": "VN SME Ledger Suite (Beta v2)",
+        "dashboard_title": "VN SME Ledger (Beta v6)",
         "dashboard_subtitle": "HỆ THỐNG QUẢN TRỊ DOANH NGHIỆP",
         "recent_activities": "🕒 HOẠT ĐỘNG",
         "quick_access": "🚀 TRUY CẬP NHANH",
@@ -192,7 +206,7 @@ LABELS = {
         "settings_bank_acc": "Bank Account No:",
         "settings_inv_type": "Invoice Type:",
         "settings_save": "Save Settings",
-        "dashboard_title": "VN SME Ledger Suite (Beta v2)",
+        "dashboard_title": "VN SME Ledger (Beta v6)",
         "dashboard_subtitle": "ENTERPRISE RESOURCE PLANNING",
         "recent_activities": "🕒 ACTIVITIES",
         "quick_access": "🚀 QUICK ACCESS",
@@ -227,8 +241,13 @@ def load_settings():
 
 def save_settings(settings):
     os.makedirs("data", exist_ok=True)
-    with open(_settings_path(), "w", encoding="utf-8") as f:
+    path = _settings_path()
+    temp_path = path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_path, path)
 
 def get_labels(settings):
     lang = settings.get("language", "vi")

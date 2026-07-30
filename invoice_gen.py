@@ -59,7 +59,7 @@ def gen_pdf_gtgt(
     buyer_name, buyer_address, buyer_tax,
     items, vat_rate=0.10,
     currency="VND", currency_decimals=0,
-    settings=None
+    settings=None, series="AA/26E"
 ):
     """
     Hóa đơn GTGT — Mẫu 01/GTGT (Nghị định 123/2020/NĐ-CP)
@@ -91,7 +91,7 @@ def gen_pdf_gtgt(
     pdf.set_font(FONT, "B", 14)
     pdf.cell(W, 8, "HÓA ĐƠN GIÁ TRỊ GIA TĂNG", ln=True, align="C")
     pdf.set_font(FONT, "", 9)
-    pdf.cell(W, 5, f"(VAT INVOICE)  |  Ký hiệu: AA/24E  |  Số (No.): {inv_id}  |  Ngày (Date): {date}", ln=True, align="C")
+    pdf.cell(W, 5, f"(VAT INVOICE)  |  Ký hiệu: {series}  |  Số (No.): {inv_id}  |  Ngày (Date): {date}", ln=True, align="C")
     pdf.set_font(FONT, "I", 8)
     pdf.set_text_color(150, 150, 150)
     pdf.cell(W, 4, "Nghị định 123/2020/NĐ-CP — Thông tư 78/2021/TT-BTC", ln=True, align="C")
@@ -159,7 +159,8 @@ def gen_pdf_gtgt(
     pdf.cell(30+24, 7, f"{fmt(grand_total)} {currency}", align="R"); pdf.ln()
 
     pdf.set_font(FONT, "I", 9)
-    pdf.cell(W, 5, f"Số tiền bằng chữ (Amount in words): {_number_to_words_vn(int(grand_total))} {currency}", ln=True)
+    words_val = _number_to_words_vn(int(grand_total)).strip().capitalize()
+    pdf.cell(W, 5, f"Số tiền bằng chữ (Amount in words): {words_val} {'đồng' if currency == 'VND' else currency}", ln=True)
 
     # ── SIGNATURES ────────────────────────────────────────
     pdf.ln(8)
@@ -196,7 +197,7 @@ def gen_pdf_bh(
     seller_name, seller_address, seller_tax, seller_bank, seller_bank_acc,
     buyer_name, buyer_address,
     items, currency="VND", currency_decimals=0,
-    settings=None
+    settings=None, series="AA/26E"
 ):
     """
     Hóa đơn bán hàng — Mẫu 02/BH
@@ -222,7 +223,7 @@ def gen_pdf_bh(
     pdf.set_font(FONT, "B", 14)
     pdf.cell(W, 8, "HÓA ĐƠN BÁN HÀNG", ln=True, align="C")
     pdf.set_font(FONT, "", 9)
-    pdf.cell(W, 5, f"(SALES RECEIPT / Mẫu 02/BH)  |  Số (No.): {inv_id}  |  Ngày (Date): {date}", ln=True, align="C")
+    pdf.cell(W, 5, f"(SALES RECEIPT / Mẫu 02/BH)  |  Ký hiệu: {series}  |  Số (No.): {inv_id}  |  Ngày (Date): {date}", ln=True, align="C")
     pdf.set_font(FONT, "I", 8)
     pdf.set_text_color(150, 150, 150)
     pdf.cell(W, 4, "Nghị định 123/2020/NĐ-CP — Dành cho hộ kinh doanh / phương pháp trực tiếp", ln=True, align="C")
@@ -274,7 +275,8 @@ def gen_pdf_bh(
     pdf.cell(150, 7, "TỔNG TIỀN THANH TOÁN (Total Amount):", align="R")
     pdf.cell(40,  7, f"{fmt(total)} {currency}", align="R"); pdf.ln()
     pdf.set_font(FONT, "I", 9)
-    pdf.cell(W, 5, f"Số tiền bằng chữ (Amount in words): {_number_to_words_vn(int(total))} {currency}", ln=True)
+    words_val = _number_to_words_vn(int(total)).strip().capitalize()
+    pdf.cell(W, 5, f"Số tiền bằng chữ (Amount in words): {words_val} {'đồng' if currency == 'VND' else currency}", ln=True)
 
     pdf.ln(8)
     pdf.set_font(FONT, "B", 9)
@@ -305,12 +307,12 @@ def gen_pdf_bh(
 
 
 def _number_to_words_vn(n):
-    """Basic VN number-to-words for amounts up to billions."""
+    """Accurate VN number-to-words for amounts up to billions."""
     units = ["", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
     teens = ["mười", "mười một", "mười hai", "mười ba", "mười bốn",
              "mười lăm", "mười sáu", "mười bảy", "mười tám", "mười chín"]
 
-    if n == 0: return "không đồng"
+    if n == 0: return "không"
     if n >= 1_000_000_000:
         b = n // 1_000_000_000
         r = n % 1_000_000_000
@@ -330,6 +332,11 @@ def _number_to_words_vn(n):
         return f"{units[h]} trăm {rest}".strip()
     if n >= 20:
         t = n // 10; r = n % 10
-        return f"{units[t]} mươi {units[r] if r else ''}".strip()
+        ones_word = units[r]
+        if r == 5:
+            ones_word = "lăm"
+        elif r == 1:
+            ones_word = "mốt"
+        return f"{units[t]} mươi {ones_word if r else ''}".strip()
     if n >= 10: return teens[n - 10]
     return units[n]

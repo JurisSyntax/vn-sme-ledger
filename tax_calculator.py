@@ -1,6 +1,6 @@
 """
 tax_calculator.py — Bảng tính thuế cho hộ kinh doanh & DNNVV
-Cập nhật: Luật Thuế GTGT sửa đổi (Luật 48/2024/QH15, hiệu lực 01/01/2026)
+Cập nhật: Luật Thuế GTGT sửa đổi (Luật 48/2024/QH15, Luật 149/2025/QH15, hiệu lực 01/01/2026)
           NQ 204/2025/QH15 + NĐ 174/2025/NĐ-CP: giảm VAT 10%→8% (01/07/2025–31/12/2026)
           TT 40/2021/TT-BTC: tỷ lệ thuế hộ kinh doanh
 """
@@ -71,22 +71,31 @@ def calc_household_tax(revenue, tax_category="distribution"):
         "total_tax": total_tax,
         "net_income": revenue - total_tax,
         "exempt": exempt,
-        "exempt_note": "Doanh thu ≤ 500 triệu VND/năm → miễn thuế GTGT & TNCN (Luật 48/2024/QH15)" if exempt else ""
+        "exempt_note": "Doanh thu ≤ 500 triệu VND/năm → miễn thuế GTGT & TNCN (Luật 149/2025/QH15)" if exempt else ""
     }
 
 
-def calc_sme_tax(revenue, expenses, vat_rate_key="reduced_8"):
+def calc_sme_tax(revenue, expenses, vat_rate_key="reduced_8", input_vat=None, cit_rate=None):
     """Calculate taxes for SME (deduction method, TT133)."""
     vat_info = SME_VAT_RATES.get(vat_rate_key, SME_VAT_RATES["standard"])
     vat_rate = vat_info["rate"]
 
+    if cit_rate is None:
+        cit_rate = CIT_RATE
+    else:
+        cit_rate = float(cit_rate)
+
     vat_output = revenue * vat_rate
-    # Assume input VAT is roughly proportional to expenses
-    vat_input = expenses * vat_rate * 0.7  # conservative estimate
+    input_vat_is_estimated = input_vat is None
+    if input_vat_is_estimated:
+        # Backward-compatible estimate when users have not entered source invoice VAT yet.
+        vat_input = expenses * vat_rate * 0.7
+    else:
+        vat_input = max(0, float(input_vat))
     vat_payable = max(0, vat_output - vat_input)
 
     profit = revenue - expenses
-    cit = max(0, profit * CIT_RATE)
+    cit = max(0, profit * cit_rate)
     net = profit - cit
 
     return {
@@ -95,10 +104,12 @@ def calc_sme_tax(revenue, expenses, vat_rate_key="reduced_8"):
         "vat_rate": vat_rate,
         "vat_label": vat_info["label"],
         "vat_output": vat_output,
+        "vat_input": vat_input,
         "vat_input_est": vat_input,
+        "vat_input_is_estimated": input_vat_is_estimated,
         "vat_payable": vat_payable,
         "profit_before_tax": profit,
-        "cit_rate": CIT_RATE,
+        "cit_rate": cit_rate,
         "cit_amount": cit,
         "net_profit": net
     }

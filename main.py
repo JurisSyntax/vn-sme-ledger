@@ -133,7 +133,7 @@ class App(tk.Tk):
         super().__init__()
         self.settings = config.load_settings()
         self.lbl = config.get_labels(self.settings)
-        self.title("VN SME Ledger Suite (Beta v2)")
+        self.title(config.APP_DISPLAY_NAME)
         self.geometry("1400x880")
         self.minsize(1250, 800)
         
@@ -494,7 +494,7 @@ class App(tk.Tk):
         # Sidebar Title
         title_lbl = tk.Label(self.frame_sidebar, text="🏢 SME LEDGER", font=("Segoe UI", 14, "bold"), fg="#F8FAFC", bg="#1E293B")
         title_lbl.pack(pady=(20, 2), padx=10, anchor="w")
-        sub_lbl = tk.Label(self.frame_sidebar, text="Phiên bản Beta v2", font=("Segoe UI", 8, "italic"), fg="#94A3B8", bg="#1E293B")
+        sub_lbl = tk.Label(self.frame_sidebar, text=f"Phiên bản {config.APP_VERSION}", font=("Segoe UI", 8, "italic"), fg="#94A3B8", bg="#1E293B")
         sub_lbl.pack(pady=(0, 20), padx=10, anchor="w")
 
         self.sidebar_buttons = {}
@@ -1627,16 +1627,14 @@ class App(tk.Tk):
                 )
             subtotal = sum(it["qty"]*it["price"] for it in items)
             vat_amt  = subtotal * vat_rate if inv_type=="01GTGT" else 0
-            db.save_invoice(self.db, inv_num, inv_type, self._current_inv_client_id,
-                            inv_date, json.dumps(items, ensure_ascii=False),
-                            subtotal, vat_amt, total, path)
-            # Auto-post journal entry linked to client (fixes: GD history blank)
-            ref_note = f"HĐ {inv_num} — {cli.get('name','')}"
-            lines = [("511", 0, subtotal), ("131", subtotal+vat_amt, 0)]
-            if vat_amt > 0:
-                lines.append(("3331", 0, vat_amt))
-            db.post_entry(self.db, inv_date, inv_num, ref_note, lines,
-                          "Sales", client_id=self._current_inv_client_id)
+            invoice_result = db.save_invoice(
+                self.db, inv_num, inv_type, self._current_inv_client_id,
+                inv_date, json.dumps(items, ensure_ascii=False),
+                subtotal, vat_amt, total, path,
+                company_name=s.get("company_name", ""),
+                seller_full_name=s.get("company_legal_rep", "") or s.get("company_name", ""),
+                auto_post=True,
+            )
             messagebox.showinfo("Thành công", f"Đã xuất hóa đơn:\n{path}\nChứng từ kế toán đã được ghi sổ.")
             self._inv_clear_items(); self._auto_inv_number()
             self._refresh_all()
@@ -2176,11 +2174,15 @@ class App(tk.Tk):
         ).grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4), sticky="w")
         self.update_check_enabled_var = tk.BooleanVar(value=bool(self.settings.get("update_check_enabled", False)))
         self.online_market_data_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_market_data_enabled", False)))
+        self.online_ocr_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_ocr_enabled", False)))
+        self.online_embeddings_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_embeddings_enabled", False)))
         self.online_document_fetch_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_document_fetch_enabled", False)))
         self.online_qr_enabled_var = tk.BooleanVar(value=bool(self.settings.get("online_qr_enabled", False)))
         online_opts = [
             ("Kiểm tra cập nhật phần mềm khi mở app", self.update_check_enabled_var),
             ("Tải tỷ giá thị trường online trong Phân tích", self.online_market_data_enabled_var),
+            ("Cho phép OCR chứng từ qua OCR.Space", self.online_ocr_enabled_var),
+            ("Cho phép tạo chỉ mục AI qua Jina", self.online_embeddings_enabled_var),
             ("Cho phép cập nhật văn bản pháp luật/biểu mẫu từ nguồn online", self.online_document_fetch_enabled_var),
             ("Tải ảnh VietQR online khi xuất hóa đơn", self.online_qr_enabled_var),
         ]
@@ -2451,6 +2453,8 @@ class App(tk.Tk):
         self.settings["backup_method"] = self.backup_method_var.get()
         self.settings["update_check_enabled"] = self.update_check_enabled_var.get()
         self.settings["online_market_data_enabled"] = self.online_market_data_enabled_var.get()
+        self.settings["online_ocr_enabled"] = self.online_ocr_enabled_var.get()
+        self.settings["online_embeddings_enabled"] = self.online_embeddings_enabled_var.get()
         self.settings["online_document_fetch_enabled"] = self.online_document_fetch_enabled_var.get()
         self.settings["online_qr_enabled"] = self.online_qr_enabled_var.get()
         self.settings["cloud_sync_enabled"] = self.cloud_sync_enabled_var.get()
