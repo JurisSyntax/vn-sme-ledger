@@ -1,0 +1,144 @@
+476 INFO: PyInstaller: 6.20.0, contrib hooks: 2026.4
+478 INFO: Python: 3.14.4
+550 INFO: Platform: Windows-11-10.0.26200-SP0
+550 INFO: Python environment: C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\.venv
+552 INFO: wrote C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\VN_SME_Ledger_PyQt6.spec
+561 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger',
+ 'C:\\Python314\\python314.zip',
+ 'C:\\Python314\\DLLs',
+ 'C:\\Python314\\Lib',
+ 'C:\\Python314',
+ 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv',
+ 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages',
+ 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger']
+1585 INFO: Appending 'datas' from .spec
+1593 INFO: checking Analysis
+1762 INFO: Building because excludes changed
+1763 INFO: Looking for Python shared library...
+1763 INFO: Using Python shared library: C:\Python314\python314.dll
+1763 INFO: Running Analysis Analysis-00.toc
+1764 INFO: Target bytecode optimization level: 0
+1764 INFO: Initializing module dependency graph...
+1768 INFO: Initializing module graph hook caches...
+1810 INFO: Analyzing modules for base_library.zip ...
+6217 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7600 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8626 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8660 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+15650 INFO: Caching module dependency graph...
+15736 INFO: Analyzing C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\main_qt.py
+15795 INFO: Processing standard module hook 'hook-PyQt6.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+19285 INFO: Processing standard module hook 'hook-PyQt6.QtWidgets.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+25893 INFO: Processing standard module hook 'hook-PyQt6.QtCore.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+33655 INFO: Processing standard module hook 'hook-PyQt6.QtGui.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+57120 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+57932 INFO: Processing standard module hook 'hook-pandas.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+61594 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+61715 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+61731 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+61810 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+63851 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+64130 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+70323 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+70328 INFO: SetuptoolsInfo: initializing cached setuptools info...
+74085 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+75650 INFO: Processing standard module hook 'hook-zoneinfo.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+80200 INFO: Processing standard module hook 'hook-pandas.io.formats.style.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+87867 INFO: Processing standard module hook 'hook-pandas.plotting.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+88023 INFO: Processing standard module hook 'hook-matplotlib.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+89134 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+90203 INFO: Processing standard module hook 'hook-matplotlib.backend_bases.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+90700 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+91053 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+91980 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+92219 INFO: Processing standard module hook 'hook-xml.dom.domreg.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+93447 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+96015 INFO: Processing standard module hook 'hook-jinja2.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+97848 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+98181 INFO: Processing standard module hook 'hook-matplotlib.pyplot.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+101108 INFO: Processing standard module hook 'hook-dateutil.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+101422 INFO: Processing pre-safe-import-module hook 'hook-six.moves.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+106747 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+106759 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+110485 INFO: Processing standard module hook 'hook-openpyxl.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+111072 INFO: Processing standard module hook 'hook-lxml.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+112057 INFO: Processing standard module hook 'hook-lxml.etree.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+116221 INFO: Processing standard module hook 'hook-pandas.io.clipboard.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+119004 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+119323 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+119327 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+119349 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+119391 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+119485 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+119486 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+119518 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+119519 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+120743 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+120748 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+121266 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+121269 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+121364 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+121438 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+121440 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+122210 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+122213 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+123867 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+123871 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+125298 INFO: Processing standard module hook 'hook-cryptography.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+128389 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+129859 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+129865 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+131067 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+143223 INFO: Processing standard module hook 'hook-matplotlib.backends.backend_qtagg.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+143239 INFO: Processing standard module hook 'hook-matplotlib.backends.qt_compat.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+143240 INFO: hook-matplotlib.backends.qt_compat: selected 'PyQt6' as Qt bindings because hook for 'PyQt6' has been run before.
+143280 INFO: Processing standard module hook 'hook-PyQt6.QtSvg.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+144897 INFO: Processing standard module hook 'hook-plotly.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+150713 INFO: Processing standard module hook 'hook-narwhals.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+175983 INFO: Processing module hooks (post-graph stage)...
+176566 INFO: Processing standard module hook 'hook-lxml.isoschematron.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+176657 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+176658 INFO: Matplotlib backend selection method: automatic discovery of used backends
+177791 INFO: Trying determine the default backend as first importable candidate from the list: ['QtAgg', 'Qt5Agg', 'Gtk4Agg', 'Gtk3Agg', 'TkAgg', 'WxAgg']
+179406 INFO: Selected matplotlib backends: ['QtAgg']
+180899 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+182058 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+182062 INFO: Processing standard module hook 'hook-lxml.objectify.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+182065 INFO: Processing standard module hook 'hook-tzdata.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+184076 INFO: Performing binary vs. data reclassification (1924 entries)
+184902 INFO: Looking for ctypes DLLs
+185127 INFO: Analyzing run-time hooks ...
+185155 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185162 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+185166 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185173 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185180 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185185 INFO: Including run-time hook 'pyi_rth_mplconfig.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185188 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+185192 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+185220 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185224 INFO: Including run-time hook 'pyi_rth_pyqt6.py' from 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+185418 INFO: Creating base_library.zip...
+185492 INFO: Looking for dynamic libraries
+194522 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin', 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\numpy.libs', 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\pandas.libs', 'C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\scipy.libs']
+194524 INFO: Extra DLL search directories (PATH): ['C:\\Users\\AMD\\.gemini\\antigravity\\scratch\\vn-sme-ledger\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin']
+198996 INFO: Warnings written to C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\build\VN_SME_Ledger_PyQt6\warn-VN_SME_Ledger_PyQt6.txt
+199711 INFO: Graph cross-reference written to C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\build\VN_SME_Ledger_PyQt6\xref-VN_SME_Ledger_PyQt6.html
+199999 INFO: checking PYZ
+200666 INFO: checking PKG
+200711 INFO: Building because toc changed
+200712 INFO: Building PKG (CArchive) VN_SME_Ledger_PyQt6.pkg
+219773 INFO: Building PKG (CArchive) VN_SME_Ledger_PyQt6.pkg completed successfully.
+219863 INFO: Bootloader C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\.venv\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+219864 INFO: checking EXE
+219906 INFO: Building because toc changed
+219906 INFO: Building EXE from EXE-00.toc
+219923 INFO: Copying bootloader EXE to C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\dist\VN_SME_Ledger_PyQt6.exe
+219930 INFO: Copying icon to EXE
+219938 INFO: Copying 0 resources to EXE
+219939 INFO: Embedding manifest in EXE
+219945 INFO: Appending PKG archive to EXE
+220109 INFO: Fixing EXE headers
+221478 INFO: Building EXE from EXE-00.toc completed successfully.
+221571 INFO: Build complete! The results are available in: C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger\dist

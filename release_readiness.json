@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "product": "VN SME Ledger",
+  "version_label": "Beta v8",
+  "status": "ADVISORY",
+  "last_reviewed": "2026-08-24",
+  "policy": "Readiness is advisory: builds are permitted, but unresolved checks must be disclosed and do not constitute legal or filing certification.",
+  "required_checks": {
+    "vietnam_law_formula_audit": false,
+    "household_tax_2026_rules": false,
+    "enterprise_tax_2026_rules": false,
+    "payroll_pit_social_insurance_rules": false,
+    "invoice_voucher_ledger_integrity": false,
+    "inventory_receivables_payables_workflows": false,
+    "attendance_overtime_payroll_workflow": false,
+    "document_template_legal_currency": false,
+    "offline_online_permission_boundary": false,
+    "pyqt6_stable_parity": false,
+    "ui_responsive_accessibility": false,
+    "full_regression_and_persistence": false
+  },
+  "blockers": [
+    "The 2026 household threshold, method rules and payroll PIT golden cases are implemented, but the legal matrix still needs independent review and wider boundary coverage.",
+    "Enterprise CIT eligibility, exemption conditions, deductible expenses and annual settlement are not release-certified.",
+    "VAT product classification, effective rates/exclusions and eligible input-VAT source documents are not release-certified.",
+    "SME VAT input must come from eligible source documents; the 70% estimate cannot be a release calculation.",
+    "Payroll insurance bases, caps, overtime classifications and 2026 employer obligations need effective-dated verification.",
+    "End-to-end accounting workflows and PyQt6/Stable parity are not yet release-certified."
+  ],
+  "release_evidence": []
+}

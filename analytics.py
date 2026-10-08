@@ -41,6 +41,7 @@ def run_dashboard(conn):
 
     fig = make_subplots(
         rows=3, cols=2,
+        specs=[[{}, {}], [{"type": "domain"}, {}], [{}, {}]],
         subplot_titles=(
             "📈 Dòng tiền (Cash Flow)", "🧾 Thuế dự kiến (Tax Liability)",
             "💸 Chi phí (Expenses)", "📊 Tổng hợp (Summary)",
@@ -281,8 +282,6 @@ def build_analytics_tab(app, tab, conn, settings, lbl):
             
         except Exception as e:
             tk.Label(chart_frame, text=f"Cần cài đặt Matplotlib để xem biểu đồ: {e}", fg="#666").pack(pady=20)
-
-    _refresh_summary()
 
     _refresh_summary()
 

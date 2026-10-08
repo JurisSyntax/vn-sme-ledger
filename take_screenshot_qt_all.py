@@ -1,57 +1,74 @@
-import sys
+"""Capture each PyQt6 page without reading or writing the real user ledger."""
+
+from __future__ import annotations
+
+import argparse
 import os
-import time
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QTimer
+import sys
+import tempfile
+from pathlib import Path
 
-# Add project root to sys.path
-sys.path.append(r"C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger")
-os.chdir(r"C:\Users\AMD\.gemini\antigravity\scratch\vn-sme-ledger")
 
-import main_qt
+PROJECT_ROOT = Path(__file__).resolve().parent
 
-def capture_all():
-    app = QApplication(sys.argv)
-    window = main_qt.VnSmeLedgerApp()
-    window.show()
 
-    out_dir = r"C:\Users\AMD\.gemini\antigravity\brain\8888d9a5-06b6-46b4-bec4-516506bee1c7"
-    os.makedirs(out_dir, exist_ok=True)
+def capture_all(output_dir: Path | None = None) -> int:
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QApplication
 
-    tab_widget = window.tabs
-    count = tab_widget.count()
+    sys.path.insert(0, str(PROJECT_ROOT))
+    output_dir = Path(output_dir or Path(tempfile.gettempdir()) / "VN_SME_Ledger_QA_Screenshots").resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    original_cwd = os.getcwd()
+    temp_dir = tempfile.TemporaryDirectory(prefix="vn_sme_qt_capture_")
+    window = None
+    try:
+        os.chdir(temp_dir.name)
+        import main_qt
 
-    def do_capture(idx):
-        if idx >= count:
-            print("Completed capturing all PyQt6 tabs!")
-            window.close()
-            app.quit()
-            return
+        app = QApplication.instance() or QApplication(sys.argv[:1])
+        window = main_qt.VnSmeLedgerApp()
+        window.show()
+        tabs = window.tabs
 
-        tab_widget.setCurrentIndex(idx)
-        # Process events to let UI redraw
-        app.processEvents()
+        def capture_page(index: int) -> None:
+            if index >= tabs.count():
+                print(f"Captured {tabs.count()} pages to {output_dir}")
+                window.close()
+                app.quit()
+                return
 
-        # Brief delay to render
-        def save_tab():
-            try:
+            tabs.setCurrentIndex(index)
+            app.processEvents()
+
+            def save_page() -> None:
                 screen = QApplication.primaryScreen()
-                pixmap = screen.grabWindow(window.winId())
-                tab_title = tab_widget.tabText(idx)
-                safe_title = "".join([c if c.isalnum() else "_" for c in tab_title])
-                out_path = os.path.join(out_dir, f"tab_qt_{idx}_{safe_title}.png")
-                pixmap.save(out_path)
-                print(f"Captured tab {idx} ({tab_title}) -> {out_path}")
-            except Exception as e:
-                print(f"Error capturing tab {idx}: {e}")
+                if screen is not None:
+                    title = tabs.tabText(index) or f"page_{index}"
+                    safe_title = "".join(char if char.isalnum() else "_" for char in title)
+                    path = output_dir / f"page_{index}_{safe_title}.png"
+                    if screen.grabWindow(window.winId()).save(str(path)):
+                        print(f"Captured page {index}: {path}")
+                QTimer.singleShot(250, lambda: capture_page(index + 1))
 
-            # Schedule next tab
-            QTimer.singleShot(1000, lambda: do_capture(idx + 1))
+            QTimer.singleShot(400, save_page)
 
-        QTimer.singleShot(500, save_tab)
+        QTimer.singleShot(700, lambda: capture_page(0))
+        exit_code = app.exec()
+        window.close()
+        app.processEvents()
+        return exit_code
+    finally:
+        if window is not None:
+            try:
+                window.close()
+            except Exception:
+                pass
+        os.chdir(original_cwd)
+        temp_dir.cleanup()
 
-    QTimer.singleShot(1000, lambda: do_capture(0))
-    sys.exit(app.exec())
 
 if __name__ == "__main__":
-    capture_all()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, help="Screenshot output directory (default: system temp)")
+    raise SystemExit(capture_all(parser.parse_args().output_dir))

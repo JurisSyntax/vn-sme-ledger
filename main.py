@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import datetime, os, json
+import datetime, os, json, ctypes, unicodedata, webbrowser
 import db, tax_engine, analytics, sync, utils
 import config, tabs_extra, debt_manager
 from core.validation import ClientValidationError, InvoiceValidationError, validate_invoice_payload
@@ -10,6 +10,8 @@ from vas_mapper import auto_vas_lines, VAS_RULES
 from presets_loader import get_vas_rules
 from core.encryption import encrypt_value, decrypt_value
 from core.ui_layout import dashboard_layout, form_column_count
+from core.cash_forecast import build_cash_forecast
+from core import order_flow, order_reports
 
 
 class Tooltip:
@@ -130,12 +132,22 @@ class NotebookPlaceholder(tk.Frame):
 
 class App(tk.Tk):
     def __init__(self):
+        if os.name == "nt":
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "VN.SME.Ledger.Desktop"
+                )
+            except (AttributeError, OSError):
+                pass
         super().__init__()
+        self.ui_font_family = utils.register_private_windows_fonts(utils.get_resource_path)
         self.settings = config.load_settings()
         self.lbl = config.get_labels(self.settings)
         self.title(config.APP_DISPLAY_NAME)
         self.geometry("1400x880")
-        self.minsize(1250, 800)
+        # Keep the app usable on smaller laptops and at 125%/150% scaling.
+        # Individual tables provide their own scrollbars for dense workflows.
+        self.minsize(960, 640)
         
         # Try to set icon
         for icon_name in ["logo.ico", "logo_fixed.png", "logo.png"]:
@@ -170,7 +182,7 @@ class App(tk.Tk):
         deep_blue = "#1565C0"  # Đông Hồ Deep Blue
         
         self.configure(bg=bg_color)
-        style.configure(".", font=("Segoe UI", 10), background="#FFFFFF", foreground=fg_color)
+        style.configure(".", font=(self.ui_font_family, 10), background="#FFFFFF", foreground=fg_color)
         
         # ── GLOBAL MOUSEWHEEL FIX (WINDOWS) ───────────────────────
         def _on_mousewheel(event):
@@ -183,15 +195,15 @@ class App(tk.Tk):
         self.bind_all("<MouseWheel>", _on_mousewheel)
         
         style.configure("TFrame", background="#FFFFFF")
-        style.configure("TLabelframe", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground=accent_color, bordercolor="#E2E8F0")
-        style.configure("TLabelframe.Label", background="#FFFFFF", font=("Segoe UI", 10, "bold"), foreground=accent_color)
+        style.configure("TLabelframe", background="#FFFFFF", font=(self.ui_font_family, 10, "bold"), foreground=accent_color, bordercolor="#E2E8F0")
+        style.configure("TLabelframe.Label", background="#FFFFFF", font=(self.ui_font_family, 10, "bold"), foreground=accent_color)
         
-        style.configure("Treeview", font=("Segoe UI", 10), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", borderwidth=0)
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"), background="#E2E8F0", foreground=fg_color, padding=6)
+        style.configure("Treeview", font=(self.ui_font_family, 10), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", borderwidth=0)
+        style.configure("Treeview.Heading", font=(self.ui_font_family, 10, "bold"), background="#E2E8F0", foreground=fg_color, padding=6)
         style.map("Treeview", background=[("selected", "#E0F2F1")], foreground=[("selected", "#004D40")])
         
         style.configure("TCombobox", padding=6)
-        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#E2E8F0")
+        style.configure("TButton", font=(self.ui_font_family, 10, "bold"), padding=6, background="#E2E8F0")
         style.map("TButton", background=[("active", "#CBD5E1")])
         
         # ── MAIN LAYOUT CONTAINERS ─────────────────────────
@@ -224,6 +236,37 @@ class App(tk.Tk):
         self.cmb_niche = ttk.Combobox(top, textvariable=self.niche_var, values=niches, state="readonly", width=22)
         self.cmb_niche.pack(side="left", padx=6)
         self.cmb_niche.bind("<<ComboboxSelected>>", self._change_niche)
+
+        self._stable_route_options = [
+            ("Trang chủ", "Trang chủ"), ("Chứng từ", "Chứng từ"),
+            ("Danh mục", "Danh mục"), ("Khách hàng", "Danh mục"),
+            ("Nhà cung cấp", "Danh mục"), ("Kho hàng", "Danh mục"),
+            ("Hóa đơn", "Hóa đơn"), ("Đơn hàng và kho", "Đơn hàng & kho"),
+            ("Sổ cái", "Chứng từ"), ("Công nợ", "Báo cáo"),
+            ("Báo cáo", "Báo cáo"), ("Phân tích", "Phân tích"),
+            ("Nhân sự", "Nhân sự"), ("Chấm công", "Nhân sự"),
+            ("Tính lương và thuế thu nhập cá nhân", "Nhân sự"),
+            ("Công cụ", "Công cụ"), ("VSIC", "Công cụ"),
+            ("Cài đặt", "Cài đặt"), ("Trợ lý AI", "Công cụ"),
+            ("Lộ trình kinh doanh", "__playbook__"),
+        ]
+        self.route_var = tk.StringVar()
+        self.route_box = ttk.Combobox(
+            top, textvariable=self.route_var,
+            values=[label for label, _route in self._stable_route_options],
+            width=30,
+        )
+        self.route_box.set("Tìm chức năng / quy trình...")
+        self.route_box.pack(side="left", padx=(12, 4))
+        self.route_box.bind("<KeyRelease>", self._stable_route_autocomplete)
+        self.route_box.bind("<<ComboboxSelected>>", self._open_stable_route)
+        self.route_box.bind("<Return>", self._open_stable_route)
+        self.route_box.bind("<FocusIn>", self._clear_route_placeholder)
+        tk.Button(
+            top, text="Lộ trình", command=self._open_business_playbook,
+            bg="#E2E8F0", fg="#0F172A", font=("Segoe UI", 9, "bold"),
+            relief="flat", padx=8, cursor="hand2",
+        ).pack(side="left", padx=4)
         
         self._change_niche()
         
@@ -270,6 +313,7 @@ class App(tk.Tk):
         self._build_dirs_tab()
         self._build_invoice_tab()
         self._build_invoice_history_tab()
+        self._build_order_flow_tab()
         self._build_history_tab()
         self._build_reports_tab()
         self._build_analytics_tab()
@@ -286,7 +330,7 @@ class App(tk.Tk):
         self.lbl_status = tk.Label(self.status_bar, text="Trạng thái: Sẵn sàng", font=("Segoe UI", 10), bg="#FFFFFF", fg=accent_color)
         self.lbl_status.pack(side="left", padx=15, pady=3)
         
-        btn_help = tk.Button(self.status_bar, text="❔ Trợ giúp nhanh", command=lambda: self.nb.select("🛠️"), 
+        btn_help = tk.Button(self.status_bar, text="❔ Trợ giúp", command=self._open_help,
                              bg="#F1F5F9", fg=deep_blue, font=("Segoe UI", 9, "bold"), relief="flat", padx=10)
         btn_help.pack(side="right", padx=10)
         
@@ -295,10 +339,11 @@ class App(tk.Tk):
         credit_status.bind("<Button-3>", lambda e, w=credit_status: (self.clipboard_clear(), self.clipboard_append(w.cget("text"))))
 
         # Tab Hover Descriptions (Tooltips)
+        # Build descriptions from the actual notebook order.  Stable keeps
+        # legacy invoice/history tabs, so fixed numeric indexes become wrong
+        # when a new workflow tab is inserted.
         self.tab_desc = {
-            0: "🏠 Trang chủ", 1: "📑 Chứng từ", 2: "🗂️ Danh mục",
-            3: "🧾 Hóa đơn", 4: "🕒 Sổ cái", 5: "📊 Báo cáo",
-            6: "📈 Phân tích", 7: "👥 Nhân sự", 8: "🛠️ Công cụ", 9: "⚙️ Cài đặt"
+            index: self.nb.tab(index, "text") for index in range(len(self.nb.tab_names))
         }
         self.nb.bind("<Motion>", self._on_nb_motion)
         self.nb.bind("<Leave>", self._on_nb_leave)
@@ -555,6 +600,110 @@ class App(tk.Tk):
         if hasattr(self, 'cmb_auto_vas'):
             self.cmb_auto_vas['values'] = list(VAS_RULES.keys())
 
+    @staticmethod
+    def _fold_route_text(value):
+        normalized = unicodedata.normalize("NFD", str(value or "").casefold())
+        folded = "".join(char for char in normalized if not unicodedata.combining(char))
+        return folded.replace("đ", "d")
+
+    def _clear_route_placeholder(self, _event=None):
+        if self.route_var.get() == "Tìm chức năng / quy trình...":
+            self.route_var.set("")
+
+    def _stable_route_autocomplete(self, event=None):
+        if event is not None and event.keysym in {"Return", "Up", "Down", "Escape"}:
+            return
+        query = self._fold_route_text(self.route_var.get())
+        labels = [label for label, _route in self._stable_route_options]
+        if not query:
+            self.route_box["values"] = labels
+            return
+        matches = [label for label in labels if query in self._fold_route_text(label)]
+        self.route_box["values"] = matches or labels
+
+    def _open_stable_route(self, _event=None):
+        query = self._fold_route_text(self.route_var.get())
+        if not query or query == self._fold_route_text("Tìm chức năng / quy trình..."):
+            return
+        selected = None
+        for label, route in self._stable_route_options:
+            folded_label = self._fold_route_text(label)
+            if folded_label == query or query in folded_label or folded_label in query:
+                selected = route
+                break
+        if selected == "__playbook__":
+            self._open_business_playbook()
+            return
+        if selected:
+            self.nb.select(selected)
+            self.lbl_status.config(text=f"Đã mở: {self.route_var.get()}")
+        else:
+            self.lbl_status.config(text="Chưa tìm thấy chức năng phù hợp")
+
+    def _open_business_playbook(self):
+        """Show the same local-first operating checklist in Stable."""
+        from core.business_playbook import get_business_playbook, get_next_actions
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Lộ trình vận hành doanh nghiệp Việt Nam")
+        dialog.geometry("900x680")
+        dialog.minsize(680, 480)
+        dialog.transient(self)
+
+        outer = ttk.Frame(dialog, padding=12)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(
+            outer,
+            text=("Checklist offline: biết nên đi đâu và làm gì. Liên kết ngoài chỉ mở khi bạn bấm; "
+                  "luôn đối chiếu với cơ quan có thẩm quyền."),
+            wraplength=840,
+        ).pack(fill="x", pady=(0, 8))
+
+        actions_frame = ttk.LabelFrame(outer, text="Việc nên làm tiếp theo")
+        actions_frame.pack(fill="x", pady=(0, 8))
+        actions = get_next_actions(self.db, self.settings)
+        for action in actions[:4]:
+            ttk.Button(
+                actions_frame,
+                text=f"{action['priority']}: {action['title']}",
+                command=lambda route=action["route"]: self._stable_playbook_route(dialog, route),
+            ).pack(side="left", padx=4, pady=5)
+
+        content_frame = ttk.Frame(outer)
+        content_frame.pack(fill="both", expand=True)
+        text = tk.Text(content_frame, wrap="word", font=("Segoe UI", 10), padx=10, pady=8)
+        scrollbar = ttk.Scrollbar(content_frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set, state="normal")
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        link_index = 0
+        for step in get_business_playbook():
+            text.insert("end", f"{step['title']}\n", "heading")
+            text.insert("end", f"{step['summary']}\n")
+            for item in step["checklist"]:
+                text.insert("end", f"  • {item}\n")
+            for label, url in step.get("official_links", []):
+                tag_name = f"link_{link_index}"
+                link_index += 1
+                text.insert("end", f"  Nguồn chính thức: {label}\n", tag_name)
+                text.tag_configure(tag_name, foreground="#2563EB", underline=True)
+                text.tag_bind(tag_name, "<Button-1>", lambda _event, target=url: webbrowser.open(target))
+            text.insert("end", "\n")
+        text.tag_configure("heading", font=("Segoe UI", 11, "bold"), foreground="#1F5B82", spacing1=8)
+        text.configure(state="disabled")
+        ttk.Button(outer, text="Đóng", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
+
+    def _stable_playbook_route(self, dialog, route):
+        route_map = {
+            "home": "Trang chủ", "documents": "Chứng từ", "directories": "Danh mục",
+            "invoices": "Hóa đơn", "ledger": "Chứng từ", "ar_ap": "Báo cáo", "reports": "Báo cáo",
+            "analytics": "Phân tích", "hr": "Nhân sự", "tools": "Công cụ", "settings": "Cài đặt",
+        }
+        if route in route_map:
+            self.nb.select(route_map[route])
+        dialog.destroy()
+
     def _fmt(self, n):
         dec = int(self.settings.get("currency_decimals", 0))
         sym = self.settings.get("currency","VND")
@@ -690,6 +839,20 @@ class App(tk.Tk):
             if not low_items.empty:
                 reminders.append(f"• Cảnh báo: Có {len(low_items)} mặt hàng sắp hết kho. Kiểm tra Danh mục > Kho hàng!")
 
+        try:
+            forecast = build_cash_forecast(self.db, horizon_days=14)
+            forecast_summary = forecast["summary"]
+            forecast_text = (
+                f"• Dòng tiền dự kiến 14 ngày: cuối kỳ {self._fmt(forecast_summary['ending_cash'])}; "
+                f"thu {self._fmt(forecast_summary['scheduled_inflow'])}, "
+                f"chi {self._fmt(forecast_summary['scheduled_outflow'])}."
+            )
+            if forecast_summary["overdue_receivables"] > 0 or forecast_summary["overdue_payables"] > 0:
+                forecast_text += " Có công nợ quá hạn cần xử lý."
+            reminders.append(forecast_text)
+        except (TypeError, ValueError, RuntimeError):
+            pass
+
         if not reminders: reminders.append("• Tuyệt vời! Hệ thống của bạn đang vận hành ổn định.")
         
         for i, r in enumerate(reminders[:3]):
@@ -702,8 +865,14 @@ class App(tk.Tk):
 
     def _refresh_all(self):
         self._refresh_reports()
+        if hasattr(self, "_refresh_ledger"):
+            self._refresh_ledger()
         if hasattr(self, "_refresh_inv_history"):
             self._refresh_inv_history()
+        if hasattr(self, "_stable_order_refresh_documents"):
+            self._stable_order_refresh_documents()
+        if hasattr(self, "_refresh_order_trace"):
+            self._refresh_order_trace()
         # Re-build home tab to update stats
         for tab in self.nb.tabs():
             if self.nb.tab(tab, "text") == "🏠":
@@ -904,7 +1073,8 @@ class App(tk.Tk):
 
     def _add_vline(self):
         try:
-            acc_val = self.cmb_acc.get().split(" - ")[0]
+            selected_account = self.cmb_acc.get().strip()
+            acc_val = selected_account.split("] ", 1)[-1].split(" - ", 1)[0].strip()
             if not acc_val:
                 messagebox.showwarning("Cảnh báo", "Vui lòng chọn tài khoản!")
                 return
@@ -961,10 +1131,13 @@ class App(tk.Tk):
         if not sel: return
         eid = self.tree_ledger.item(sel[0])['values'][0]
         if messagebox.askyesno("Confirm", f"Xóa chứng từ #{eid}?"):
-            db.delete_entry(self.db, eid)
-            utils.log_activity(f"Xóa chứng từ: #{eid}")
-            if self.editing_entry_id == eid: self._clear_voucher()
-            self._refresh_all()
+            try:
+                db.delete_entry(self.db, eid)
+                utils.log_activity(f"Xóa chứng từ: #{eid}")
+                if self.editing_entry_id == eid: self._clear_voucher()
+                self._refresh_all()
+            except Exception as exc:
+                messagebox.showerror("Không thể xóa chứng từ", str(exc))
 
     def _refresh_ledger(self):
         for i in self.tree_ledger.get_children(): self.tree_ledger.delete(i)
@@ -1064,7 +1237,7 @@ class App(tk.Tk):
             vals = [e.get() for e in entries]
             try:
                 if state['id'] is not None:
-                    if fn_upd.__code__.co_argcount == len(vals) + 3:  # conn, pk, *vals
+                    if db_cols[pk_col] == "id":
                         fn_upd(self.db, state['id'], *vals)
                     else:
                         fn_upd(self.db, *vals, state['id'])
@@ -1088,7 +1261,11 @@ class App(tk.Tk):
             if not sel: return
             row = tree.item(sel[0])['values']
             # Skip pk column, fill entries
-            data_vals = [v for i,v in enumerate(row) if i != pk_col]
+            data_vals = (
+                [v for i, v in enumerate(row) if i != pk_col]
+                if db_cols[pk_col] == "id"
+                else list(row)
+            )
             for i,e in enumerate(entries):
                 if i < len(data_vals):
                     e.delete(0,"end"); e.insert(0, str(data_vals[i]))
@@ -1171,10 +1348,17 @@ class App(tk.Tk):
         af = ttk.Frame(top); af.grid(row=0, column=6, rowspan=2, padx=10, sticky="ns")
         btn_save = tk.Button(af, text=self.lbl["add_btn"], bg="#388E3C", fg="white", width=12)
         btn_save.pack(pady=2)
-        btn_clear = tk.Button(af, text="Làm sạch mẫu", width=12,
-                              command=lambda: [e.delete(0,"end") for e in entries] or
-                              state.update({'id':None}) or
-                              btn_save.config(text=self.lbl["add_btn"], bg="#388E3C"))
+        btn_clear = tk.Button(
+            af,
+            text="Làm sạch mẫu",
+            width=12,
+            command=lambda: (
+                state.update({'id': None}),
+                [e.delete(0, "end") for e in entries],
+                entries[6].set("corporate"),
+                btn_save.config(text=self.lbl["add_btn"], bg="#388E3C"),
+            ),
+        )
         btn_clear.pack(pady=2)
         
         tk.Button(top, text="❓", command=lambda: messagebox.showinfo("Hướng dẫn", "Nhập thông tin Khách hàng hoặc Nhà cung cấp. MST dùng để tự động lấy thông tin lên hóa đơn."), relief="flat").grid(row=0, column=7, padx=5)
@@ -1308,15 +1492,19 @@ class App(tk.Tk):
         log_ctrl = ttk.Frame(log_frm); log_ctrl.pack(fill="x", pady=5)
         
         tk.Label(log_ctrl, text="Mặt hàng:").pack(side="left", padx=4)
-        self.cmb_log_item = ttk.Combobox(log_ctrl, state="readonly", width=25)
+        self.cmb_log_item = ttk.Combobox(log_ctrl, state="readonly", width=18)
         self.cmb_log_item.pack(side="left", padx=4)
         tk.Label(log_ctrl, text="Ngày:").pack(side="left", padx=4)
-        self.ent_log_date = tk.Entry(log_ctrl, width=12); self.ent_log_date.pack(side="left", padx=4)
+        self.ent_log_date = tk.Entry(log_ctrl, width=10); self.ent_log_date.pack(side="left", padx=4)
         self.ent_log_date.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
-        
+        tk.Label(log_ctrl, text="Loại:").pack(side="left", padx=4)
+        self.cmb_log_type = ttk.Combobox(log_ctrl, values=["Nhập kho", "Xuất kho"], state="readonly", width=9)
+        self.cmb_log_type.current(0)
+        self.cmb_log_type.pack(side="left", padx=4)
         tk.Label(log_ctrl, text="Số lượng:").pack(side="left", padx=4)
         self.ent_log_qty = tk.Entry(log_ctrl, width=8); self.ent_log_qty.pack(side="left", padx=4)
-        
+        tk.Label(log_ctrl, text="Ghi chú:").pack(side="left", padx=4)
+        self.ent_log_note = tk.Entry(log_ctrl, width=18); self.ent_log_note.pack(side="left", padx=4)
         tk.Button(log_ctrl, text="Nhập/Xuất", command=self._inv_log_add, 
                   bg="#1976D2", fg="white", font=("Segoe UI", 9, "bold")).pack(side="left", padx=10)
 
@@ -1376,7 +1564,7 @@ class App(tk.Tk):
         match = df[df['name'] == item_name]
         if match.empty: messagebox.showerror("Error","Không tìm thấy mặt hàng."); return
         item_id = int(match.iloc[0]['id'])
-        log_type = "import" if "import" in self.cmb_log_type.get() else "export"
+        log_type = "import" if self.cmb_log_type.get() == "Nhập kho" else "export"
         try:
             qty = float(self.ent_log_qty.get())
             db.add_inventory_log(self.db, item_id, self.ent_log_date.get(), log_type, qty, self.ent_log_note.get())
@@ -1398,7 +1586,10 @@ class App(tk.Tk):
                 tags = ()
                 if float(r.qty) <= float(r.min_qty) and float(r.min_qty) > 0:
                     tags = ("low_stock",)
-                self.tree_inv.insert("","end", values=list(r), tags=tags)
+                self.tree_inv.insert("", "end", values=(
+                    r.id, r.name, r.category, r.unit, r.base_unit, r.conv_factor,
+                    r.qty, r.cost, r.price, r.batch_no, r.min_qty,
+                ), tags=tags)
             self.cmb_log_item['values'] = df['name'].tolist()
         for i in self.tree_inv_log.get_children(): self.tree_inv_log.delete(i)
         logdf = db.get_inventory_log(self.db)
@@ -1683,6 +1874,511 @@ class App(tk.Tk):
         self.cmb_inv_hist_client.set("")
         self._refresh_inv_history()
 
+    # ── ORDER AND STOCK FLOW TAB (shared service with PyQt6) ───
+    def _build_order_flow_tab(self):
+        """Stable UI for the same source-linked order workflow as PyQt6."""
+        tab = ttk.Frame(self.nb)
+        self.nb.add(tab, text="Đơn hàng & kho")
+
+        intro = tk.Label(
+            tab,
+            text=(
+                "Báo giá và đơn hàng không tự đổi tồn kho. Phiếu nhập, giao hàng "
+                "và trả hàng phải lấy từ chứng từ nguồn; hóa đơn chỉ là liên kết "
+                "nguồn, không tự thay đổi công nợ."
+            ),
+            justify="left",
+            anchor="w",
+            wraplength=1050,
+            fg="#546E7A",
+        )
+        intro.pack(fill="x", padx=8, pady=(8, 4))
+
+        form = ttk.LabelFrame(tab, text="Lập chứng từ luồng bán / mua")
+        form.pack(fill="x", padx=8, pady=4)
+        for column, weight in ((1, 1), (3, 1), (5, 1), (7, 1)):
+            form.grid_columnconfigure(column, weight=weight)
+
+        self._stable_order_type_labels = {
+            value: order_flow.DOCUMENT_LABELS[value] for value in order_flow.DOCUMENT_TYPES
+        }
+        self._stable_order_type_values = {
+            label: value for value, label in self._stable_order_type_labels.items()
+        }
+        self._stable_order_direction_values = {
+            "Bán / khách hàng": "SALE",
+            "Mua / nhà cung cấp": "PURCHASE",
+        }
+        self.stable_order_type_var = tk.StringVar(value=self._stable_order_type_labels["QUOTE"])
+        self.stable_order_direction_var = tk.StringVar(value="Bán / khách hàng")
+        self.stable_order_party_var = tk.StringVar()
+        self.stable_order_source_var = tk.StringVar()
+        self.stable_order_item_var = tk.StringVar()
+        self.stable_order_number_var = tk.StringVar()
+        self.stable_order_date_var = tk.StringVar(value=datetime.date.today().isoformat())
+        self.stable_order_operator_var = tk.StringVar(value="Người dùng cục bộ")
+        self.stable_order_note_var = tk.StringVar()
+        self.stable_order_qty_var = tk.StringVar(value="1")
+        self.stable_order_price_var = tk.StringVar(value="0")
+        self.stable_order_cost_var = tk.StringVar(value="0")
+
+        tk.Label(form, text="Loại chứng từ:").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        self.stable_order_type = ttk.Combobox(
+            form, textvariable=self.stable_order_type_var,
+            values=list(self._stable_order_type_values), state="readonly", width=24,
+        )
+        self.stable_order_type.grid(row=0, column=1, columnspan=2, sticky="ew", padx=5, pady=3)
+        self.stable_order_type.bind("<<ComboboxSelected>>", self._stable_order_type_changed)
+
+        tk.Label(form, text="Chiều nghiệp vụ:").grid(row=0, column=3, sticky="w", padx=5, pady=3)
+        self.stable_order_direction = ttk.Combobox(
+            form, textvariable=self.stable_order_direction_var,
+            values=list(self._stable_order_direction_values), state="readonly", width=20,
+        )
+        self.stable_order_direction.grid(row=0, column=4, columnspan=2, sticky="ew", padx=5, pady=3)
+        self.stable_order_direction.bind("<<ComboboxSelected>>", self._stable_order_direction_changed)
+
+        tk.Label(form, text="Số chứng từ:").grid(row=0, column=6, sticky="w", padx=5, pady=3)
+        self.stable_order_number = ttk.Entry(form, textvariable=self.stable_order_number_var, width=20)
+        self.stable_order_number.grid(row=0, column=7, sticky="ew", padx=5, pady=3)
+
+        tk.Label(form, text="Đối tượng:").grid(row=1, column=0, sticky="w", padx=5, pady=3)
+        self.stable_order_party = ttk.Combobox(form, textvariable=self.stable_order_party_var, state="readonly", width=28)
+        self.stable_order_party.grid(row=1, column=1, columnspan=3, sticky="ew", padx=5, pady=3)
+        self.stable_order_party.bind("<<ComboboxSelected>>", self._stable_order_party_changed)
+
+        tk.Label(form, text="Ngày:").grid(row=1, column=4, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_date_var, width=14).grid(row=1, column=5, sticky="ew", padx=5, pady=3)
+        tk.Label(form, text="Người lập:").grid(row=1, column=6, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_operator_var, width=20).grid(row=1, column=7, sticky="ew", padx=5, pady=3)
+
+        tk.Label(form, text="Chứng từ nguồn:").grid(row=2, column=0, sticky="w", padx=5, pady=3)
+        self.stable_order_source = ttk.Combobox(form, textvariable=self.stable_order_source_var, state="readonly", width=42)
+        self.stable_order_source.grid(row=2, column=1, columnspan=5, sticky="ew", padx=5, pady=3)
+        self.stable_order_source.bind("<<ComboboxSelected>>", self._stable_order_source_changed)
+        self.stable_order_source_hint = tk.Label(form, text="", fg="#546E7A", anchor="w")
+        self.stable_order_source_hint.grid(row=2, column=6, columnspan=2, sticky="w", padx=5, pady=3)
+
+        tk.Label(form, text="Mặt hàng:").grid(row=3, column=0, sticky="w", padx=5, pady=3)
+        self.stable_order_item = ttk.Combobox(form, textvariable=self.stable_order_item_var, state="readonly", width=32)
+        self.stable_order_item.grid(row=3, column=1, columnspan=3, sticky="ew", padx=5, pady=3)
+        self.stable_order_item.bind("<<ComboboxSelected>>", self._stable_order_item_changed)
+        tk.Label(form, text="Số lượng:").grid(row=3, column=4, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_qty_var, width=12).grid(row=3, column=5, sticky="ew", padx=5, pady=3)
+        tk.Label(form, text="Đơn giá / giá vốn:").grid(row=3, column=6, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_price_var, width=18).grid(row=3, column=7, sticky="ew", padx=5, pady=3)
+
+        tk.Label(form, text="Ghi chú:").grid(row=4, column=0, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_note_var).grid(row=4, column=1, columnspan=5, sticky="ew", padx=5, pady=3)
+        tk.Label(form, text="Giá vốn dòng:").grid(row=4, column=6, sticky="w", padx=5, pady=3)
+        ttk.Entry(form, textvariable=self.stable_order_cost_var, width=18).grid(row=4, column=7, sticky="ew", padx=5, pady=3)
+
+        line_actions = ttk.Frame(form)
+        line_actions.grid(row=5, column=0, columnspan=8, sticky="ew", padx=5, pady=(3, 6))
+        tk.Button(line_actions, text="Thêm dòng", command=self._stable_order_add_line, bg="#546E7A", fg="white").pack(side="left", padx=3)
+        tk.Button(line_actions, text="Xóa dòng chọn", command=self._stable_order_remove_line).pack(side="left", padx=3)
+        tk.Button(line_actions, text="Lưu sửa đổi nháp", command=self._stable_order_update, bg="#546E7A", fg="white").pack(side="right", padx=3)
+        tk.Button(line_actions, text="Tạo bản nháp", command=self._stable_order_create, bg="#388E3C", fg="white").pack(side="right", padx=3)
+
+        self.tree_stable_order_lines = ttk.Treeview(
+            tab, columns=("item", "unit", "qty", "price", "cost", "source"), show="headings", height=4,
+        )
+        for column, heading, width in (
+            ("item", "Mặt hàng", 260), ("unit", "ĐVT", 70), ("qty", "Số lượng", 90),
+            ("price", "Đơn giá", 120), ("cost", "Giá vốn", 120), ("source", "Dòng nguồn", 100),
+        ):
+            self.tree_stable_order_lines.heading(column, text=heading)
+            self.tree_stable_order_lines.column(column, width=width, anchor="e" if column in ("qty", "price", "cost") else "w")
+        self.tree_stable_order_lines.pack(fill="x", padx=8, pady=(2, 4))
+        self._stable_order_line_map = {}
+        self._stable_order_item_data = {}
+        self._stable_order_party_values = {}
+        self._stable_order_source_values = {}
+
+        action_bar = ttk.Frame(tab)
+        action_bar.pack(fill="x", padx=8, pady=3)
+        tk.Button(action_bar, text="Sửa bản nháp", command=self._stable_order_load_draft).pack(side="left", padx=3)
+        tk.Button(action_bar, text="Xác nhận", command=self._stable_order_confirm).pack(side="left", padx=3)
+        tk.Button(action_bar, text="Ghi nhận kho / hoàn tất", command=self._stable_order_commit, bg="#388E3C", fg="white").pack(side="left", padx=3)
+        tk.Button(action_bar, text="Hủy", command=self._stable_order_cancel, bg="#C62828", fg="white").pack(side="left", padx=3)
+        tk.Label(action_bar, text="Hóa đơn cùng đối tượng:").pack(side="left", padx=(16, 4))
+        self.stable_order_invoice_var = tk.StringVar()
+        self.stable_order_invoice = ttk.Combobox(action_bar, textvariable=self.stable_order_invoice_var, state="readonly", width=38)
+        self.stable_order_invoice.pack(side="left", fill="x", expand=True, padx=3)
+        tk.Button(action_bar, text="Liên kết hóa đơn", command=self._stable_order_link_invoice).pack(side="left", padx=3)
+
+        self.tree_stable_orders = ttk.Treeview(
+            tab,
+            columns=("id", "number", "type", "direction", "party", "date", "status", "invoice"),
+            show="headings",
+        )
+        stable_order_headers = (
+            ("id", "ID", 0), ("number", "Số chứng từ", 145), ("type", "Loại", 180),
+            ("direction", "Chiều", 70), ("party", "Đối tượng", 210), ("date", "Ngày", 95),
+            ("status", "Trạng thái", 105), ("invoice", "Hóa đơn liên kết", 180),
+        )
+        for column, heading, width in stable_order_headers:
+            self.tree_stable_orders.heading(column, text=heading)
+            self.tree_stable_orders.column(column, width=width, stretch=column not in ("id",))
+        self.tree_stable_orders.column("id", width=0, stretch=False)
+        self.tree_stable_orders.pack(fill="both", expand=True, padx=8, pady=(3, 8))
+        self.tree_stable_orders.bind("<<TreeviewSelect>>", self._stable_order_selection_changed)
+        self._stable_order_suggest_number()
+        self._stable_order_type_changed()
+
+    def _stable_order_type_changed(self, event=None):
+        document_type = self._stable_order_type_values.get(self.stable_order_type_var.get(), "QUOTE")
+        expected = {
+            "SALES_ORDER": "SALE", "DELIVERY": "SALE",
+            "PURCHASE_ORDER": "PURCHASE", "GOODS_RECEIPT": "PURCHASE",
+        }.get(document_type)
+        if expected:
+            label = "Bán / khách hàng" if expected == "SALE" else "Mua / nhà cung cấp"
+            self.stable_order_direction_var.set(label)
+            self.stable_order_direction.configure(state="disabled")
+        else:
+            self.stable_order_direction.configure(state="readonly")
+        self._stable_order_suggest_number()
+        self._stable_order_refresh_parties()
+
+    def _stable_order_direction_changed(self, event=None):
+        self._stable_order_refresh_parties()
+
+    def _stable_order_party_changed(self, event=None):
+        self._stable_order_refresh_sources()
+
+    def _stable_order_suggest_number(self):
+        if not hasattr(self, "stable_order_number_var"):
+            return
+        document_type = self._stable_order_type_values.get(self.stable_order_type_var.get(), "QUOTE")
+        prefix = {"QUOTE": "BG", "SALES_ORDER": "SO", "PURCHASE_ORDER": "PO", "GOODS_RECEIPT": "NK", "DELIVERY": "GH", "RETURN": "TH"}.get(document_type, "CT")
+        day_prefix = f"{prefix}-{datetime.date.today():%Y%m%d}-"
+        maximum = 0
+        try:
+            for document in order_flow.list_documents(self.db, document_type=document_type, limit=1000):
+                number = str(document.get("document_no", ""))
+                if number.startswith(day_prefix):
+                    try:
+                        maximum = max(maximum, int(number.rsplit("-", 1)[-1]))
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+        current = self.stable_order_number_var.get().strip()
+        if not current or current.startswith(tuple(f"{value}-" for value in ("BG", "SO", "PO", "NK", "GH", "TH", "CT"))):
+            self.stable_order_number_var.set(f"{day_prefix}{maximum + 1:04d}")
+
+    def _stable_order_refresh_parties(self):
+        direction = self._stable_order_direction_values.get(self.stable_order_direction_var.get(), "SALE")
+        current_id = self._stable_order_party_values.get(self.stable_order_party_var.get())
+        frame = db.get_clients(self.db) if direction == "SALE" else db.get_suppliers(self.db)
+        values = []
+        self._stable_order_party_values = {}
+        if not frame.empty:
+            for _, row in frame.iterrows():
+                label = f"{str(row.get('name', '')).strip()} (#{int(row['id'])})"
+                values.append(label)
+                self._stable_order_party_values[label] = int(row["id"])
+        self.stable_order_party.configure(values=values)
+        if current_id is not None:
+            for label, value in self._stable_order_party_values.items():
+                if value == current_id:
+                    self.stable_order_party_var.set(label)
+                    break
+        elif not values:
+            self.stable_order_party_var.set("")
+        self._stable_order_refresh_sources()
+
+    def _stable_order_refresh_sources(self):
+        document_type = self._stable_order_type_values.get(self.stable_order_type_var.get(), "QUOTE")
+        direction = self._stable_order_direction_values.get(self.stable_order_direction_var.get(), "SALE")
+        party_id = self._stable_order_party_values.get(self.stable_order_party_var.get())
+        values = []
+        self._stable_order_source_values = {}
+        if document_type in ("QUOTE", "SALES_ORDER", "PURCHASE_ORDER"):
+            values.append("Không liên kết chứng từ nguồn")
+            self._stable_order_source_values[values[0]] = None
+        else:
+            values.append("— Chọn chứng từ nguồn —")
+            self._stable_order_source_values[values[0]] = None
+        try:
+            for source in order_flow.list_source_documents(self.db, document_type, direction, party_id):
+                label = f"{source['document_no']} | {source['document_date']} | {source['party_name']}"
+                values.append(label)
+                self._stable_order_source_values[label] = source["id"]
+        except Exception:
+            pass
+        self.stable_order_source.configure(values=values)
+        self.stable_order_source_var.set(values[0] if values else "")
+        self._stable_order_source_changed()
+
+    def _stable_order_source_changed(self, event=None):
+        source_id = self._stable_order_source_values.get(self.stable_order_source_var.get())
+        self.stable_order_source_hint.config(text="")
+        self._stable_order_item_data = {}
+        values = []
+        if source_id is not None:
+            try:
+                source = order_flow.get_document(self.db, source_id)
+                self.stable_order_source_hint.config(text=f"{len(source['lines'])} dòng nguồn")
+                for line in source["lines"]:
+                    label = f"{line['description']} ({line['unit']}) — tối đa {line['qty']:g}"
+                    values.append(label)
+                    self._stable_order_item_data[label] = {
+                        "item_id": line["item_id"], "source_line_id": line["id"],
+                        "description": line["description"], "unit": line["unit"],
+                        "unit_price": line["unit_price"], "unit_cost": line["unit_cost"],
+                    }
+            except Exception:
+                pass
+        else:
+            try:
+                frame = db.get_inventory(self.db)
+                for _, row in frame.iterrows():
+                    label = f"{str(row['name'])} ({str(row.get('unit', ''))})"
+                    values.append(label)
+                    self._stable_order_item_data[label] = {
+                        "item_id": int(row["id"]), "source_line_id": None,
+                        "description": str(row["name"]), "unit": str(row.get("unit", "")),
+                        "unit_price": float(row.get("price", 0) or 0),
+                        "unit_cost": float(row.get("cost", 0) or 0),
+                    }
+            except Exception:
+                pass
+        self.stable_order_item.configure(values=values)
+        self.stable_order_item_var.set(values[0] if values else "")
+        self._stable_order_item_changed()
+
+    def _stable_order_item_changed(self, event=None):
+        data = self._stable_order_item_data.get(self.stable_order_item_var.get())
+        if data:
+            self.stable_order_price_var.set(str(data.get("unit_price", 0)))
+            self.stable_order_cost_var.set(str(data.get("unit_cost", 0)))
+
+    def _stable_order_add_line(self):
+        data = self._stable_order_item_data.get(self.stable_order_item_var.get())
+        if not data:
+            return messagebox.showwarning("Thiếu mặt hàng", "Chưa có mặt hàng hợp lệ trong danh mục.")
+        try:
+            qty = float(self.stable_order_qty_var.get().replace(",", ""))
+            price = float(self.stable_order_price_var.get().replace(",", ""))
+            cost = float(self.stable_order_cost_var.get().replace(",", ""))
+            if qty <= 0 or price < 0 or cost < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return messagebox.showwarning("Dòng hàng", "Số lượng phải lớn hơn 0; đơn giá và giá vốn không được âm.")
+        line = dict(data, qty=qty, unit_price=price, unit_cost=cost)
+        iid = self.tree_stable_order_lines.insert(
+            "", "end", values=(line["description"], line["unit"], f"{qty:,.4f}", f"{price:,.2f}", f"{cost:,.2f}", line.get("source_line_id") or ""),
+        )
+        self._stable_order_line_map[iid] = line
+
+    def _stable_order_remove_line(self):
+        for iid in self.tree_stable_order_lines.selection():
+            self._stable_order_line_map.pop(iid, None)
+            self.tree_stable_order_lines.delete(iid)
+
+    def _stable_order_create(self):
+        direction = self._stable_order_direction_values.get(self.stable_order_direction_var.get(), "SALE")
+        party_id = self._stable_order_party_values.get(self.stable_order_party_var.get())
+        try:
+            document = order_flow.create_document(
+                self.db, self.stable_order_number_var.get(),
+                self._stable_order_type_values.get(self.stable_order_type_var.get(), "QUOTE"), direction,
+                self.stable_order_date_var.get(), party_id,
+                list(self._stable_order_line_map.values()),
+                self._stable_order_source_values.get(self.stable_order_source_var.get()),
+                self.stable_order_note_var.get(), self.stable_order_operator_var.get(),
+            )
+            self._stable_order_refresh_documents()
+            for iid in self.tree_stable_order_lines.get_children():
+                self.tree_stable_order_lines.delete(iid)
+            self._stable_order_line_map.clear()
+            self.stable_order_number_var.set("")
+            self._stable_order_suggest_number()
+            messagebox.showinfo("Đã tạo bản nháp", f"Đã lưu {document['label']} {document['document_no']} ở trạng thái nháp.")
+        except Exception as exc:
+            messagebox.showwarning("Không thể tạo chứng từ", str(exc))
+
+    def _stable_order_load_draft(self):
+        document_id = self._stable_order_selected_id()
+        if document_id is None:
+            return messagebox.showinfo("Sửa bản nháp", "Vui lòng chọn chứng từ nháp trong danh sách.")
+        try:
+            document = order_flow.get_document(self.db, document_id)
+            if not document:
+                return messagebox.showwarning("Lỗi", "Không tìm thấy chứng từ.")
+            if document["status"] != "DRAFT":
+                return messagebox.showwarning("Không thể sửa", "Chỉ có thể sửa chứng từ ở trạng thái DRAFT. Chứng từ đã xác nhận hoặc hoàn tất là bất biến.")
+            self._stable_editing_draft_id = document_id
+            self.stable_order_number_var.set(document["document_no"])
+            type_label = order_flow.DOCUMENT_LABELS.get(document["document_type"], "Báo giá")
+            self.stable_order_type_var.set(type_label)
+            dir_label = "Bán / khách hàng" if document["direction"] == "SALE" else "Mua / nhà cung cấp"
+            self.stable_order_direction_var.set(dir_label)
+            self.stable_order_date_var.set(document["document_date"][:10])
+            self._stable_order_refresh_parties()
+            party_label = f"{document['party_name']} (#{document['party_id']})"
+            self.stable_order_party_var.set(party_label)
+            self._stable_order_refresh_sources()
+            if document["source_document_id"]:
+                for label, sid in self._stable_order_source_values.items():
+                    if sid == document["source_document_id"]:
+                        self.stable_order_source_var.set(label)
+                        break
+            self.stable_order_note_var.set(document.get("note", "") or "")
+            self.stable_order_operator_var.set(document.get("operator", "Người dùng cục bộ") or "Người dùng cục bộ")
+
+            for iid in self.tree_stable_order_lines.get_children():
+                self.tree_stable_order_lines.delete(iid)
+            self._stable_order_line_map.clear()
+            for line in document["lines"]:
+                data = {
+                    "item_id": line["item_id"],
+                    "description": line["description"],
+                    "unit": line.get("unit", ""),
+                    "qty": line["qty"],
+                    "unit_price": line.get("unit_price", 0),
+                    "unit_cost": line.get("unit_cost", 0),
+                    "source_line_id": line.get("source_line_id"),
+                }
+                iid = self.tree_stable_order_lines.insert(
+                    "", "end",
+                    values=(line["description"], line.get("unit", ""), f"{line['qty']:,.4f}", f"{line.get('unit_price', 0):,.2f}", f"{line.get('unit_cost', 0):,.2f}", line.get("source_line_id") or ""),
+                )
+                self._stable_order_line_map[iid] = data
+            messagebox.showinfo(
+                "Đã nạp bản nháp",
+                f"Đã nạp {document['label']} {document['document_no']} ({len(document['lines'])} dòng) vào form. Bạn có thể sửa đổi và bấm 'Lưu sửa đổi nháp'.",
+            )
+        except Exception as exc:
+            messagebox.showwarning("Không thể nạp bản nháp", str(exc))
+
+    def _stable_order_update(self):
+        draft_id = getattr(self, "_stable_editing_draft_id", None)
+        if draft_id is None:
+            draft_id = self._stable_order_selected_id()
+        if draft_id is None:
+            return messagebox.showinfo("Lưu sửa đổi", "Vui lòng chọn hoặc nạp một chứng từ nháp để cập nhật.")
+        party_id = self._stable_order_party_values.get(self.stable_order_party_var.get())
+        try:
+            document = order_flow.update_document_draft(
+                self.db,
+                draft_id,
+                lines=list(self._stable_order_line_map.values()),
+                document_date=self.stable_order_date_var.get(),
+                party_id=party_id,
+                note=self.stable_order_note_var.get(),
+                operator=self.stable_order_operator_var.get(),
+            )
+            self._stable_editing_draft_id = None
+            self._stable_order_refresh_documents()
+            for iid in self.tree_stable_order_lines.get_children():
+                self.tree_stable_order_lines.delete(iid)
+            self._stable_order_line_map.clear()
+            messagebox.showinfo("Đã cập nhật", f"Đã cập nhật bản nháp {document['label']} {document['document_no']}.")
+        except Exception as exc:
+            messagebox.showwarning("Không thể cập nhật", str(exc))
+
+    def _stable_order_selected_id(self):
+        selected = self.tree_stable_orders.selection()
+        if not selected:
+            return None
+        values = self.tree_stable_orders.item(selected[0], "values")
+        try:
+            return int(values[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _stable_order_confirm(self):
+        document_id = self._stable_order_selected_id()
+        if document_id is None:
+            return messagebox.showinfo("Xác nhận", "Chọn chứng từ cần xác nhận.")
+        try:
+            order_flow.confirm_document(self.db, document_id, self.stable_order_operator_var.get())
+            self._stable_order_refresh_documents()
+        except Exception as exc:
+            messagebox.showwarning("Không thể xác nhận", str(exc))
+
+    def _stable_order_commit(self):
+        document_id = self._stable_order_selected_id()
+        if document_id is None:
+            return messagebox.showinfo("Ghi nhận kho", "Chọn chứng từ đã xác nhận.")
+        try:
+            result = order_flow.commit_document(self.db, document_id, self.stable_order_operator_var.get())
+            self._stable_order_refresh_documents()
+            self._refresh_all()
+            messagebox.showinfo("Đã ghi nhận", f"{result['label']} hoàn tất. Biến động kho: {result.get('movement', 'NONE')}.")
+        except Exception as exc:
+            messagebox.showwarning("Không thể ghi nhận", str(exc))
+
+    def _stable_order_cancel(self):
+        document_id = self._stable_order_selected_id()
+        if document_id is None:
+            return messagebox.showinfo("Hủy", "Chọn chứng từ cần hủy.")
+        try:
+            order_flow.cancel_document(self.db, document_id, self.stable_order_operator_var.get())
+            self._stable_order_refresh_documents()
+        except Exception as exc:
+            messagebox.showwarning("Không thể hủy", str(exc))
+
+    def _stable_order_refresh_documents(self):
+        if not hasattr(self, "tree_stable_orders"):
+            return
+        selected_id = self._stable_order_selected_id()
+        for iid in self.tree_stable_orders.get_children():
+            self.tree_stable_orders.delete(iid)
+        try:
+            rows = order_flow.list_documents(self.db, limit=500)
+        except Exception:
+            rows = []
+        for row in rows:
+            self.tree_stable_orders.insert(
+                "", "end", values=(
+                    row["id"], row["document_no"], row["label"],
+                    "Bán" if row["direction"] == "SALE" else "Mua", row["party_name"],
+                    row["document_date"], row["status"], row.get("invoice_numbers", "") or "—",
+                ),
+            )
+        if selected_id is not None:
+            for iid in self.tree_stable_orders.get_children():
+                try:
+                    if int(self.tree_stable_orders.item(iid, "values")[0]) == selected_id:
+                        self.tree_stable_orders.selection_set(iid)
+                        break
+                except (TypeError, ValueError, IndexError):
+                    continue
+        self._stable_order_selection_changed()
+
+    def _stable_order_selection_changed(self, event=None):
+        if not hasattr(self, "stable_order_invoice"):
+            return
+        document_id = self._stable_order_selected_id()
+        values = []
+        self._stable_order_invoice_values = {}
+        if document_id is not None:
+            try:
+                for invoice in order_flow.list_invoice_candidates(self.db, document_id):
+                    label = f"{invoice['invoice_number']} | {invoice['date']} | Còn {invoice['outstanding']:,.0f}"
+                    values.append(label)
+                    self._stable_order_invoice_values[label] = invoice["id"]
+            except Exception:
+                pass
+        self.stable_order_invoice.configure(values=values)
+        self.stable_order_invoice_var.set(values[0] if values else "")
+
+    def _stable_order_link_invoice(self):
+        document_id = self._stable_order_selected_id()
+        invoice_id = getattr(self, "_stable_order_invoice_values", {}).get(self.stable_order_invoice_var.get())
+        if document_id is None or invoice_id is None:
+            return messagebox.showinfo("Liên kết hóa đơn", "Chọn chứng từ và hóa đơn cùng đối tượng.")
+        try:
+            order_flow.link_invoice_to_document(self.db, document_id, invoice_id, self.stable_order_operator_var.get())
+            self._stable_order_refresh_documents()
+            messagebox.showinfo("Đã liên kết", "Đã lưu liên kết nguồn; công nợ vẫn lấy theo hóa đơn và phiếu thu/chi.")
+        except Exception as exc:
+            messagebox.showwarning("Không thể liên kết", str(exc))
+
     def _refresh_inv_history(self):
         if not hasattr(self, 'tree_inv_hist'): return
         for i in self.tree_inv_hist.get_children(): self.tree_inv_hist.delete(i)
@@ -1873,6 +2569,10 @@ class App(tk.Tk):
         sub.add(t2, text=lbl_t2)
         self._build_revenue_panel(t2)
 
+        t3 = ttk.Frame(sub)
+        sub.add(t3, text="🔗 Truy vết luồng")
+        self._build_order_trace_panel(t3)
+
     def _build_b02_panel(self, parent):
         """B02-DNN — Báo cáo KQHĐKD theo TT133."""
         ctl = ttk.Frame(parent); ctl.pack(fill="x", padx=6, pady=4)
@@ -2029,6 +2729,97 @@ class App(tk.Tk):
                     f"{profit:,.0f}"
                 ))
 
+    def _build_order_trace_panel(self, parent):
+        """Read-only source-chain report shared with the PyQt6 release UI."""
+        ctl = ttk.Frame(parent)
+        ctl.pack(fill="x", padx=6, pady=5)
+        tk.Label(ctl, text="Chiều:").pack(side="left", padx=4)
+        self.stable_trace_direction_var = tk.StringVar(value="Tất cả")
+        self.stable_trace_direction = ttk.Combobox(
+            ctl, textvariable=self.stable_trace_direction_var,
+            values=("Tất cả", "Bán", "Mua"), state="readonly", width=12,
+        )
+        self.stable_trace_direction.pack(side="left", padx=3)
+        tk.Label(ctl, text="Trạng thái:").pack(side="left", padx=4)
+        self.stable_trace_status_var = tk.StringVar(value="Tất cả")
+        self.stable_trace_status = ttk.Combobox(
+            ctl, textvariable=self.stable_trace_status_var,
+            values=("Tất cả", "Nháp", "Đã xác nhận", "Đang xử lý", "Hoàn tất", "Đã hủy"),
+            state="readonly", width=16,
+        )
+        self.stable_trace_status.pack(side="left", padx=3)
+        tk.Button(ctl, text="Tải báo cáo", command=self._refresh_order_trace, bg="#1565C0", fg="white").pack(side="left", padx=8)
+        tk.Button(ctl, text="Xuất CSV", command=self._export_order_trace, bg="#388E3C", fg="white").pack(side="left", padx=3)
+
+        note = tk.Label(
+            parent,
+            text="Chuỗi nguồn giúp đối chiếu báo giá, đơn hàng, nhập/xuất, hóa đơn và số công nợ còn lại. Báo cáo chỉ đọc.",
+            fg="#546E7A", anchor="w", justify="left", wraplength=1050,
+        )
+        note.pack(fill="x", padx=8, pady=(0, 4))
+        columns = ("number", "type", "date", "party", "status", "chain", "qty", "value", "fulfilled", "movement", "invoice", "outstanding")
+        self.tree_order_trace = ttk.Treeview(parent, columns=columns, show="headings")
+        headers = (
+            ("number", "Số chứng từ", 135), ("type", "Loại", 170), ("date", "Ngày", 92),
+            ("party", "Đối tượng", 180), ("status", "Trạng thái", 100), ("chain", "Chuỗi nguồn", 260),
+            ("qty", "Số lượng", 80), ("value", "Giá trị", 120), ("fulfilled", "Đã thực hiện", 95),
+            ("movement", "Kho", 65), ("invoice", "Hóa đơn", 135), ("outstanding", "Còn nợ", 120),
+        )
+        for column, heading, width in headers:
+            self.tree_order_trace.heading(column, text=heading)
+            self.tree_order_trace.column(column, width=width, anchor="e" if column in ("qty", "value", "fulfilled", "outstanding") else "w")
+        sb_y = ttk.Scrollbar(parent, orient="vertical", command=self.tree_order_trace.yview)
+        sb_x = ttk.Scrollbar(parent, orient="horizontal", command=self.tree_order_trace.xview)
+        self.tree_order_trace.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        self.tree_order_trace.pack(fill="both", expand=True, padx=6, side="left")
+        sb_y.pack(side="right", fill="y")
+        sb_x.pack(side="bottom", fill="x")
+        self._refresh_order_trace()
+
+    def _refresh_order_trace(self):
+        if not hasattr(self, "tree_order_trace"):
+            return
+        direction = {"Bán": "SALE", "Mua": "PURCHASE"}.get(self.stable_trace_direction_var.get())
+        status = {
+            "Nháp": "DRAFT", "Đã xác nhận": "CONFIRMED", "Đang xử lý": "PARTIAL",
+            "Hoàn tất": "COMPLETED", "Đã hủy": "CANCELLED",
+        }.get(self.stable_trace_status_var.get())
+        try:
+            rows = order_reports.build_order_trace_report(self.db, direction=direction, status=status)
+        except Exception as exc:
+            rows = []
+            if hasattr(self, "lbl_status"):
+                self.lbl_status.config(text=f"Không thể tải báo cáo luồng: {exc}")
+        for iid in self.tree_order_trace.get_children():
+            self.tree_order_trace.delete(iid)
+        for row in rows:
+            self.tree_order_trace.insert("", "end", values=(
+                row["document_no"], row["document_label"], row["document_date"], row["party_name"],
+                row["status"], row["source_chain"], f"{row['quantity']:,.4f}",
+                f"{row['gross_value']:,.0f}", f"{row['fulfilled_quantity']:,.4f}", row["movement"],
+                row["invoice_numbers"] or "—", f"{row['invoice_outstanding']:,.0f}",
+            ))
+
+    def _export_order_trace(self):
+        from tkinter import filedialog
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", filetypes=[("CSV files", "*.csv")],
+            title="Lưu báo cáo truy vết luồng",
+        )
+        if not path:
+            return
+        direction = {"Bán": "SALE", "Mua": "PURCHASE"}.get(self.stable_trace_direction_var.get())
+        status = {
+            "Nháp": "DRAFT", "Đã xác nhận": "CONFIRMED", "Đang xử lý": "PARTIAL",
+            "Hoàn tất": "COMPLETED", "Đã hủy": "CANCELLED",
+        }.get(self.stable_trace_status_var.get())
+        try:
+            order_reports.export_order_trace_csv(self.db, path, direction=direction, status=status)
+            messagebox.showinfo("Xuất báo cáo", f"Đã lưu báo cáo: {path}")
+        except Exception as exc:
+            messagebox.showerror("Lỗi xuất báo cáo", str(exc))
+
     def _refresh_reports(self):
         """Refresh B02-DNN income statement."""
         if not hasattr(self, "txt_report"): return
@@ -2084,13 +2875,37 @@ class App(tk.Tk):
         tab = ttk.Frame(self.nb)
         self.nb.add(tab, text=self.lbl.get("tab_tools", "Công cụ"))
         sub = ttk.Notebook(tab); sub.pack(fill="both", expand=True, padx=12, pady=12)
+        self.tools_sub_nb = sub
         
         t1 = ttk.Frame(sub); tabs_extra.build_tax_calc_tab(self, sub, self.lbl)
         t2 = ttk.Frame(sub); tabs_extra.build_legal_docs_tab(self, sub, self.lbl)
         t3 = ttk.Frame(sub); tabs_extra.build_manual_tab(self, sub, self.lbl)
         t4 = ttk.Frame(sub); tabs_extra.build_ai_tab(self, sub, self.lbl)
         
-        self._bind_sub_tips(sub, {0:"Tính toán thuế & Lương", 1:"Văn bản pháp luật & Biểu mẫu 2026", 2:"Hướng dẫn sử dụng", 3:"Trợ lý AI (Offline)"})
+        self._bind_sub_tips(sub, {0:"Tính toán thuế & Lương", 1:"Văn bản pháp luật & Biểu mẫu 2026", 2:"Trợ giúp theo nghiệp vụ", 3:"Trợ lý AI (Offline)"})
+
+    def _open_help(self):
+        """Show page-specific help while keeping the full manual available."""
+        import manual as manual_mod
+        tab_name = self.nb.tab(self.nb.index("current"), "text")
+        help_key = {
+            "Chứng từ": "ledger",
+            "Danh mục": "directories",
+            "Hóa đơn": "invoices",
+            "Sổ cái": "ledger",
+            "Báo cáo": "reports",
+            "Phân tích": "reports",
+            "Nhân sự": "tax_calc",
+        }
+        key = next((value for label, value in help_key.items() if label in (tab_name or "")), None)
+        if key and key in manual_mod.MANUAL:
+            entry = manual_mod.MANUAL[key]
+            messagebox.showinfo(f"Trợ giúp · {entry['title']}", entry["content"].strip())
+            return
+        self.nb.select("🛠️")
+        sub = getattr(self, "tools_sub_nb", None)
+        if sub is not None:
+            sub.select(2)
 
     def _build_settings_tab(self):
         tab = ttk.Frame(self.nb)
@@ -2501,15 +3316,20 @@ class App(tk.Tk):
             self.cmb_inv_hist_client['values'] = [""] + df['name'].tolist()
 
 
-def reset_to_original():
-    files = ["data/ledger.db", "data/settings.json", "data/employees.json"]
+def reset_to_original(
+    database_path="data/ledger.db",
+    settings_path="data/settings.json",
+    employees_path="data/employees.json",
+):
+    """Reset the configured local profile; paths are injectable for isolated QA."""
+    files = [database_path, settings_path, employees_path]
     for f in files:
         if os.path.exists(f): 
             try: os.remove(f)
             except Exception as e: print(f"Error deleting {f}: {e}")
     # Re-initialize DB
     import db
-    conn = db.init_db("data/ledger.db")
+    conn = db.init_db(database_path)
     try:
         conn.close()
     except:

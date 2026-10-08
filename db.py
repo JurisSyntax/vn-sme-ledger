@@ -1,10 +1,23 @@
 import hashlib
 import json
-import sqlite3, pandas as pd
+import sqlite3
 import os
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+
+
+class _LazyPandas:
+    """Keep the database module lightweight until a DataFrame API is used."""
+
+    def __getattr__(self, name):
+        import pandas
+
+        globals()["pd"] = pandas
+        return getattr(pandas, name)
+
+
+pd = _LazyPandas()
 
 TT133_ACCOUNTS = [
     ("111",  "Tiền mặt",                                        "Tài sản"),
@@ -47,6 +60,13 @@ def init_db(path="data/ledger.db"):
     conn.executescript('''
     CREATE TABLE IF NOT EXISTS accounts (code TEXT PRIMARY KEY, name TEXT, type TEXT);
 
+    -- Compatibility shell for older local databases and reset checks. New
+    -- accounting writes use journal_entries/journal_lines exclusively.
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY,
+        account TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -83,6 +103,11 @@ def init_db(path="data/ledger.db"):
         note TEXT,
         type TEXT,
         client_id INTEGER DEFAULT NULL,
+        supplier_id INTEGER DEFAULT NULL,
+        invoice_id INTEGER DEFAULT NULL,
+        source_type TEXT DEFAULT '',
+        source_id INTEGER DEFAULT NULL,
+        posting_key TEXT DEFAULT NULL,
         audit_hash TEXT DEFAULT "",
         created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
     );
@@ -105,7 +130,7 @@ def init_db(path="data/ledger.db"):
         cost REAL, 
         price REAL,
         batch_no TEXT DEFAULT "",
-        category TEXT DEFAULT "Chung",
+        category TEXT DEFAULT "Hàng hóa",
         min_qty REAL DEFAULT 0.0
     );
     CREATE TABLE IF NOT EXISTS fixed_assets (
@@ -137,6 +162,7 @@ def init_db(path="data/ledger.db"):
         inv_number TEXT UNIQUE,
         inv_type TEXT,
         client_id INTEGER,
+        supplier_id INTEGER DEFAULT NULL,
         date TEXT,
         items_json TEXT,
         subtotal REAL,
@@ -188,6 +214,11 @@ def init_db(path="data/ledger.db"):
         "ALTER TABLE clients ADD COLUMN currency_decimals INTEGER DEFAULT 0",
         "ALTER TABLE clients ADD COLUMN address TEXT DEFAULT ''",
         "ALTER TABLE journal_entries ADD COLUMN client_id INTEGER DEFAULT NULL",
+        "ALTER TABLE journal_entries ADD COLUMN supplier_id INTEGER DEFAULT NULL",
+        "ALTER TABLE journal_entries ADD COLUMN invoice_id INTEGER DEFAULT NULL",
+        "ALTER TABLE journal_entries ADD COLUMN source_type TEXT DEFAULT ''",
+        "ALTER TABLE journal_entries ADD COLUMN source_id INTEGER DEFAULT NULL",
+        "ALTER TABLE journal_entries ADD COLUMN posting_key TEXT DEFAULT NULL",
         "ALTER TABLE inventory ADD COLUMN base_unit TEXT DEFAULT ''",
         "ALTER TABLE inventory ADD COLUMN conv_factor REAL DEFAULT 1.0",
         "ALTER TABLE inventory ADD COLUMN batch_no TEXT DEFAULT ''",
@@ -207,6 +238,7 @@ def init_db(path="data/ledger.db"):
     # Register current schema version (Beta v6 -> Version 6)
     try:
         conn.execute("INSERT OR IGNORE INTO schema_version (version, description) VALUES (6, 'Beta v6 schema release')")
+        conn.execute("INSERT OR IGNORE INTO schema_version (version, description) VALUES (7, 'Auditable posting and inventory transfer foundation')")
         conn.commit()
     except Exception:
         pass
@@ -217,7 +249,92 @@ def init_db(path="data/ledger.db"):
     cur.executemany("INSERT OR IGNORE INTO accounts VALUES (?,?,?)", TT133_ACCOUNTS)
     conn.commit()
 
+    _ensure_phase1_schema(conn)
+
+    # A posting key is optional, but unique when supplied. It makes retries
+    # safe for services that can be called again after an interrupted request.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_posting_key "
+        "ON journal_entries(posting_key) WHERE posting_key IS NOT NULL AND posting_key <> ''"
+    )
+    conn.commit()
+
+    try:
+        from core.inventory_transfer import ensure_inventory_transfer_schema
+        ensure_inventory_transfer_schema(conn)
+    except Exception:
+        # Keep legacy startup resilient; transfer functions retry the schema
+        # check before their first use and surface real migration errors.
+        pass
+
+    try:
+        from core.asset_transfer import ensure_asset_transfer_schema
+        ensure_asset_transfer_schema(conn)
+    except Exception:
+        # Legacy startup must remain resilient; asset functions retry schema
+        # migration and surface real errors when the feature is used.
+        pass
+
     return conn
+
+def _ensure_phase1_schema(conn):
+    conn.executescript('''
+    CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        tax_code TEXT DEFAULT '',
+        address TEXT DEFAULT '',
+        bank_account TEXT DEFAULT '',
+        bank_name TEXT DEFAULT '',
+        contact_person TEXT DEFAULT '',
+        phone TEXT DEFAULT '',
+        email TEXT DEFAULT '',
+        payment_terms_days INTEGER DEFAULT 30,
+        notes TEXT DEFAULT '',
+        created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_allocations (
+        id INTEGER PRIMARY KEY,
+        invoice_id INTEGER,
+        payment_entry_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        allocated_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),
+        notes TEXT DEFAULT '',
+        FOREIGN KEY(invoice_id) REFERENCES invoices(id),
+        FOREIGN KEY(payment_entry_id) REFERENCES journal_entries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_rule_versions (
+        id INTEGER PRIMARY KEY,
+        rule_type TEXT NOT NULL,
+        effective_from TEXT NOT NULL,
+        parameters_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
+    );
+    ''')
+    conn.commit()
+    
+    migrations = [
+        "ALTER TABLE journal_entries ADD COLUMN due_date TEXT DEFAULT NULL",
+        "ALTER TABLE journal_entries ADD COLUMN supplier_id INTEGER DEFAULT NULL",
+        "ALTER TABLE invoices ADD COLUMN due_date TEXT DEFAULT NULL",
+        "ALTER TABLE invoices ADD COLUMN supplier_id INTEGER DEFAULT NULL",
+    ]
+    for sql in migrations:
+        try: 
+            conn.execute(sql)
+            conn.commit()
+        except Exception: 
+            pass
+
+    # Seed default tax rules
+    try:
+        from core.tax_rules import seed_default_rules
+        seed_default_rules(conn)
+    except Exception:
+        pass
+
 
 def get_schema_version(conn) -> int:
     """Return latest integer schema version recorded in the database."""
@@ -309,7 +426,10 @@ def reopen_period(conn, value, reason=""):
         )
     return True
 
-def _audit_hash(date, ref, note, lines, tx_type="", client_id=None):
+def _audit_hash(
+    date, ref, note, lines, tx_type="", client_id=None, supplier_id=None,
+    source_type="", source_id=None, posting_key=None, invoice_id=None,
+):
     payload = {
         "date": date,
         "ref": ref,
@@ -318,6 +438,18 @@ def _audit_hash(date, ref, note, lines, tx_type="", client_id=None):
         "client_id": client_id,
         "lines": [(str(a), float(d), float(c)) for a, d, c in lines],
     }
+    # Keep legacy hashes stable while protecting the supplier party on new AP entries.
+    if supplier_id is not None:
+        payload["supplier_id"] = supplier_id
+    # Preserve legacy hashes while protecting newly linked invoice entries.
+    if invoice_id is not None:
+        payload["invoice_id"] = invoice_id
+    if str(source_type or "").strip():
+        payload["source_type"] = str(source_type).strip()
+    if source_id is not None:
+        payload["source_id"] = source_id
+    if str(posting_key or "").strip():
+        payload["posting_key"] = str(posting_key).strip()
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -390,38 +522,84 @@ def _validate_journal_lines(conn, lines):
     return normalized
 
 
-def _insert_journal_entry(conn, date, ref, note, normalized, tx_type="", client_id=None):
+def _insert_journal_entry(
+    conn, date, ref, note, normalized, tx_type="", client_id=None, supplier_id=None,
+    invoice_id=None, source_type="", source_id=None, posting_key=None,
+):
     """Insert a validated entry without committing; callers own the transaction."""
     cur = conn.cursor()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ahash = _audit_hash(date, ref, note, normalized, tx_type, client_id)
-    cur.execute("INSERT INTO journal_entries(date,ref,note,type,client_id,audit_hash,created_at) VALUES (?,?,?,?,?,?,?)",
-                (date, ref, note, tx_type, client_id, ahash, ts))
+    ahash = _audit_hash(
+        date, ref, note, normalized, tx_type, client_id, supplier_id,
+        source_type, source_id, posting_key, invoice_id,
+    )
+    cur.execute(
+        "INSERT INTO journal_entries(date,ref,note,type,client_id,supplier_id,invoice_id,"
+        "source_type,source_id,posting_key,audit_hash,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (date, ref, note, tx_type, client_id, supplier_id, invoice_id,
+         source_type or "", source_id, posting_key, ahash, ts),
+    )
     eid = cur.lastrowid
     cur.executemany("INSERT INTO journal_lines VALUES (NULL,?,?,?,?)",
                     [(eid, *line) for line in normalized])
     return eid
 
 
-def post_entry(conn, date, ref, note, lines, tx_type="", client_id=None):
+def post_entry(
+    conn, date, ref, note, lines, tx_type="", client_id=None, supplier_id=None,
+    invoice_id=None, source_type="", source_id=None, posting_key=None,
+):
     assert_period_open(conn, date)
     normalized = _validate_journal_lines(conn, lines)
     with conn:
-        return _insert_journal_entry(conn, date, ref, note, normalized, tx_type, client_id)
+        return _insert_journal_entry(
+            conn, date, ref, note, normalized, tx_type, client_id, supplier_id,
+            invoice_id, source_type, source_id, posting_key,
+        )
 
-def update_entry(conn, entry_id, date, ref, note, lines, tx_type="", client_id=None):
-    current = conn.execute("SELECT date FROM journal_entries WHERE id=?", (entry_id,)).fetchone()
+
+def _entry_is_invoice_linked(conn, entry_id, ref=None, tx_type=None, invoice_id=None):
+    """Return whether an entry is owned by an invoice rather than the ledger UI."""
+    if invoice_id is not None:
+        return True
+    if str(tx_type or "").strip().lower() != "sales" or not str(ref or "").strip():
+        return False
+    return conn.execute("SELECT 1 FROM invoices WHERE inv_number=?", (ref,)).fetchone() is not None
+
+
+def _entry_is_source_linked(source_type=None, source_id=None, posting_key=None):
+    return bool(
+        str(source_type or "").strip()
+        or source_id is not None
+        or str(posting_key or "").strip()
+    )
+
+
+def _entry_is_protected(conn, entry_id, ref=None, tx_type=None, invoice_id=None,
+                        source_type=None, source_id=None, posting_key=None):
+    return _entry_is_invoice_linked(conn, entry_id, ref, tx_type, invoice_id) or _entry_is_source_linked(
+        source_type, source_id, posting_key
+    )
+
+def update_entry(conn, entry_id, date, ref, note, lines, tx_type="", client_id=None, supplier_id=None):
+    current = conn.execute(
+        "SELECT date, ref, type, invoice_id, source_type, source_id, posting_key "
+        "FROM journal_entries WHERE id=?", (entry_id,)
+    ).fetchone()
     if not current:
         raise ValueError(f"Không tìm thấy chứng từ #{entry_id}")
+    if _entry_is_protected(conn, entry_id, current[1], current[2], current[3], current[4], current[5], current[6]):
+        raise ValueError("Không thể sửa bút toán liên kết hóa đơn; hãy điều chỉnh từ quy trình hóa đơn")
     assert_period_open(conn, current[0])
     assert_period_open(conn, date)
     normalized = _validate_journal_lines(conn, lines)
     with conn:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ahash = _audit_hash(date, ref, note, normalized, tx_type, client_id)
+        ahash = _audit_hash(date, ref, note, normalized, tx_type, client_id, supplier_id)
         cur = conn.execute(
-            "UPDATE journal_entries SET date=?, ref=?, note=?, type=?, client_id=?, audit_hash=?, created_at=? WHERE id=?",
-            (date, ref, note, tx_type, client_id, ahash, ts, entry_id)
+            "UPDATE journal_entries SET date=?, ref=?, note=?, type=?, client_id=?, supplier_id=?, audit_hash=?, created_at=? WHERE id=?",
+            (date, ref, note, tx_type, client_id, supplier_id, ahash, ts, entry_id)
         )
         if cur.rowcount != 1:
             raise ValueError(f"Không tìm thấy chứng từ #{entry_id}")
@@ -440,9 +618,10 @@ def validate_ledger_integrity(conn):
     """Return a read-only integrity report for journal balance and audit hashes."""
     issues = []
     entries = conn.execute(
-        "SELECT id,date,ref,note,type,client_id,audit_hash FROM journal_entries ORDER BY id"
+        "SELECT id,date,ref,note,type,client_id,supplier_id,invoice_id,source_type,source_id,posting_key,audit_hash "
+        "FROM journal_entries ORDER BY id"
     ).fetchall()
-    for entry_id, date, ref, note, tx_type, client_id, audit_hash in entries:
+    for entry_id, date, ref, note, tx_type, client_id, supplier_id, invoice_id, source_type, source_id, posting_key, audit_hash in entries:
         lines = conn.execute(
             "SELECT account,debit,credit FROM journal_lines WHERE entry_id=? ORDER BY id",
             (entry_id,),
@@ -452,10 +631,17 @@ def validate_ledger_integrity(conn):
         except ValueError as exc:
             issues.append(f"Chứng từ #{entry_id}: {exc}")
             continue
-        expected = _audit_hash(date, ref, note, normalized, tx_type or "", client_id)
+        expected = _audit_hash(
+            date, ref, note, normalized, tx_type or "", client_id, supplier_id,
+            source_type, source_id, posting_key, invoice_id,
+        )
+        legacy_expected = _audit_hash(
+            date, ref, note, normalized, tx_type or "", client_id, supplier_id,
+            source_type, source_id, posting_key,
+        )
         if not audit_hash:
             issues.append(f"Chứng từ #{entry_id}: thiếu audit hash")
-        elif audit_hash != expected:
+        elif audit_hash != expected and audit_hash != legacy_expected:
             issues.append(f"Chứng từ #{entry_id}: audit hash không khớp")
 
     return {"ok": not issues, "entries_checked": len(entries), "issues": issues}
@@ -463,7 +649,8 @@ def validate_ledger_integrity(conn):
 def export_audit_trail(conn):
     """Export complete audit trail with cryptographic verification status."""
     entries = conn.execute("""
-        SELECT e.id, e.date, e.ref, e.note, e.type, e.client_id, e.audit_hash, e.created_at,
+        SELECT e.id, e.date, e.ref, e.note, e.type, e.client_id, e.supplier_id,
+               e.invoice_id, e.source_type, e.source_id, e.posting_key, e.audit_hash, e.created_at,
                COUNT(l.id) as total_lines, SUM(l.debit) as total_debit, SUM(l.credit) as total_credit
         FROM journal_entries e
         LEFT JOIN journal_lines l ON e.id = l.entry_id
@@ -473,14 +660,21 @@ def export_audit_trail(conn):
 
     audit_data = []
     for row in entries:
-        eid, date, ref, note, tx_type, client_id, ahash, created_at, lines_cnt, dr, cr = row
+        eid, date, ref, note, tx_type, client_id, supplier_id, invoice_id, source_type, source_id, posting_key, ahash, created_at, lines_cnt, dr, cr = row
         lines = conn.execute("SELECT account,debit,credit FROM journal_lines WHERE entry_id=? ORDER BY id", (eid,)).fetchall()
         expected = ""
         is_valid = False
         try:
             norm = _validate_journal_lines(conn, lines)
-            expected = _audit_hash(date, ref, note, norm, tx_type or "", client_id)
-            is_valid = (ahash == expected)
+            expected = _audit_hash(
+                date, ref, note, norm, tx_type or "", client_id, supplier_id,
+                source_type, source_id, posting_key, invoice_id,
+            )
+            legacy_expected = _audit_hash(
+                date, ref, note, norm, tx_type or "", client_id, supplier_id,
+                source_type, source_id, posting_key,
+            )
+            is_valid = ahash in {expected, legacy_expected}
         except Exception:
             is_valid = False
 
@@ -491,6 +685,11 @@ def export_audit_trail(conn):
             "note": note,
             "type": tx_type,
             "client_id": client_id,
+            "supplier_id": supplier_id,
+            "invoice_id": invoice_id,
+            "source_type": source_type or "",
+            "source_id": source_id,
+            "posting_key": posting_key,
             "total_debit": dr or 0.0,
             "total_credit": cr or 0.0,
             "stored_hash": ahash or "",
@@ -501,9 +700,14 @@ def export_audit_trail(conn):
     return pd.DataFrame(audit_data)
 
 def delete_entry(conn, entry_id):
-    current = conn.execute("SELECT date FROM journal_entries WHERE id=?", (entry_id,)).fetchone()
+    current = conn.execute(
+        "SELECT date, ref, type, invoice_id, source_type, source_id, posting_key "
+        "FROM journal_entries WHERE id=?", (entry_id,)
+    ).fetchone()
     if not current:
         return False
+    if _entry_is_protected(conn, entry_id, current[1], current[2], current[3], current[4], current[5], current[6]):
+        raise ValueError("Không thể xóa bút toán liên kết hóa đơn; hãy điều chỉnh từ quy trình hóa đơn")
     assert_period_open(conn, current[0])
     conn.execute("DELETE FROM journal_entries WHERE id=?", (entry_id,))
     conn.commit()
@@ -513,11 +717,14 @@ def delete_entry(conn, entry_id):
 def reverse_entry(conn, entry_id, reversal_date, ref="", note=""):
     """Create an offsetting entry without changing the original entry."""
     row = conn.execute(
-        "SELECT date, ref, note, type, client_id FROM journal_entries WHERE id=?",
+        "SELECT date, ref, note, type, client_id, supplier_id, invoice_id, "
+        "source_type, source_id, posting_key FROM journal_entries WHERE id=?",
         (entry_id,),
     ).fetchone()
     if not row:
         raise ValueError(f"Không tìm thấy chứng từ #{entry_id}")
+    if _entry_is_protected(conn, entry_id, row[1], row[3], row[6], row[7], row[8], row[9]):
+        raise ValueError("Không thể đảo bút toán liên kết hóa đơn; hãy điều chỉnh từ quy trình hóa đơn")
     lines = conn.execute(
         "SELECT account, debit, credit FROM journal_lines WHERE entry_id=? ORDER BY id",
         (entry_id,),
@@ -535,16 +742,61 @@ def reverse_entry(conn, entry_id, reversal_date, ref="", note=""):
         reversed_lines,
         "Reversal",
         client_id=row[4],
+        supplier_id=row[5],
     )
 
 def get_flat_df(conn):
     return pd.read_sql('''
         SELECT e.id AS entry_id, e.date, e.created_at, e.ref, e.note, e.type,
-               l.account, l.debit, l.credit, e.client_id
+               l.account, l.debit, l.credit, e.client_id, e.supplier_id,
+               e.source_type, e.source_id, e.posting_key
         FROM journal_entries e
         JOIN journal_lines l ON e.id = l.entry_id
         ORDER BY e.date DESC, e.created_at DESC, e.id DESC
     ''', conn)
+
+
+def get_dashboard_totals(conn):
+    """Return startup dashboard totals directly from SQLite, without Pandas."""
+    cursor = conn.execute("""
+        SELECT COUNT(l.id) AS line_count,
+               COALESCE(SUM(CASE WHEN l.account LIKE '511%' AND l.credit > 0 THEN l.credit ELSE 0 END), 0) AS revenue_511,
+               COALESCE(SUM(CASE WHEN l.account LIKE '515%' AND l.credit > 0 THEN l.credit ELSE 0 END), 0) AS revenue_515,
+               COALESCE(SUM(CASE WHEN l.account LIKE '632%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS cogs_632,
+               COALESCE(SUM(CASE WHEN l.account LIKE '635%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS expense_635,
+               COALESCE(SUM(CASE WHEN l.account LIKE '641%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS expense_641,
+               COALESCE(SUM(CASE WHEN l.account LIKE '642%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS expense_642,
+               COALESCE(SUM(CASE WHEN l.account LIKE '811%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS expense_811,
+               COALESCE(SUM(CASE WHEN l.account LIKE '3331%' AND l.credit > 0 THEN l.credit ELSE 0 END), 0) AS vat_output,
+               COALESCE(SUM(CASE WHEN l.account LIKE '133%' AND l.debit > 0 THEN l.debit ELSE 0 END), 0) AS vat_input,
+               COALESCE(SUM(CASE WHEN l.account LIKE '111%' OR l.account LIKE '112%' OR l.account LIKE '113%' THEN l.debit - l.credit ELSE 0 END), 0) AS cash,
+               COALESCE(SUM(CASE WHEN l.account LIKE '131%' OR l.account LIKE '138%' THEN l.debit - l.credit ELSE 0 END), 0) AS receivable,
+               COALESCE(SUM(CASE WHEN l.account LIKE '331%' OR l.account LIKE '333%' OR l.account LIKE '334%' OR l.account LIKE '338%' THEN l.credit - l.debit ELSE 0 END), 0) AS payable
+        FROM journal_lines l
+        JOIN journal_entries e ON e.id = l.entry_id
+    """)
+    row = cursor.fetchone()
+    totals = dict(zip((column[0] for column in cursor.description), row))
+    totals["has_data"] = bool(totals.pop("line_count", 0))
+    return totals
+
+
+def get_dashboard_revenue_summary(conn, limit=6):
+    """Return recent monthly chart values as plain records, without Pandas."""
+    limit = max(1, min(120, int(limit)))
+    cursor = conn.execute("""
+        SELECT substr(e.date, 1, 7) AS period,
+               COALESCE(SUM(CASE WHEN l.credit > 0 AND (l.account LIKE '511%' OR l.account LIKE '515%') THEN l.credit ELSE 0 END), 0) AS revenue,
+               COALESCE(SUM(CASE WHEN l.debit > 0 AND (l.account LIKE '632%' OR l.account LIKE '635%' OR l.account LIKE '641%' OR l.account LIKE '642%' OR l.account LIKE '811%') THEN l.debit ELSE 0 END), 0) AS expense
+        FROM journal_entries e
+        JOIN journal_lines l ON e.id = l.entry_id
+        WHERE e.date IS NOT NULL AND length(e.date) >= 7
+        GROUP BY substr(e.date, 1, 7)
+        ORDER BY period DESC
+        LIMIT ?
+    """, (limit,))
+    names = [column[0] for column in cursor.description]
+    return [dict(zip(names, row)) for row in reversed(cursor.fetchall())]
 
 def get_entry_lines(conn, entry_id):
     cur = conn.cursor()
@@ -649,7 +901,10 @@ def update_client(conn, client_id, name, tax_code, contact, address="", currency
     conn.commit()
 
 def get_clients(conn):
-    return pd.read_sql("SELECT * FROM clients", conn)
+    df = pd.read_sql("SELECT * FROM clients", conn)
+    if "currency_decimals" in df.columns:
+        df["currency_decimals"] = pd.to_numeric(df["currency_decimals"], errors="coerce").fillna(0).clip(0, 6).astype(int)
+    return df
 
 def delete_client(conn, client_id):
     conn.execute("DELETE FROM clients WHERE id=?", (client_id,))
@@ -664,21 +919,92 @@ def get_client_by_name(conn, name):
         return dict(zip(cols, row))
     return None
 
+
+def get_client_by_id(conn, client_id):
+    """Return one customer by stable primary key for UI/data linkage."""
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM clients WHERE id=?", (client_id,))
+    row = cur.fetchone()
+    if row:
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    return None
+
 # ── Inventory ────────────────────────────────────────────────
-def add_inventory(conn, name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category="Chung", min_qty=0.0):
-    conn.execute("INSERT INTO inventory VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
-                 (name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category, min_qty))
+def add_inventory(conn, name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category="Hàng hóa", min_qty=0.0):
+    from core.validation import parse_number
+
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("Tên hàng hóa không được trống")
+    unit = str(unit or "Cái").strip() or "Cái"
+    base_unit = str(base_unit or unit).strip() or unit
+    conv_factor = parse_number(conv_factor, "Tỷ lệ quy đổi", minimum=0.000001)
+    qty = parse_number(qty, "Số lượng tồn", default=0.0, minimum=0.0)
+    cost = parse_number(cost, "Giá vốn", default=0.0, minimum=0.0)
+    price = parse_number(price, "Giá bán", default=0.0, minimum=0.0)
+    min_qty = parse_number(min_qty, "Ngưỡng cảnh báo", default=0.0, minimum=0.0)
+    conn.execute(
+        """INSERT INTO inventory
+           (name,unit,base_unit,conv_factor,qty,cost,price,batch_no,category,min_qty)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (name, unit, base_unit, conv_factor, qty, cost, price,
+         str(batch_no or "").strip(), str(category or "Hàng hóa").strip() or "Hàng hóa", min_qty),
+    )
     conn.commit()
 
-def update_inventory(conn, item_id, name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category="Chung", min_qty=0.0):
+def update_inventory(conn, item_id, name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category="Hàng hóa", min_qty=0.0):
+    from core.validation import parse_number
+
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("Tên hàng hóa không được trống")
+    unit = str(unit or "Cái").strip() or "Cái"
+    base_unit = str(base_unit or unit).strip() or unit
+    conv_factor = parse_number(conv_factor, "Tỷ lệ quy đổi", minimum=0.000001)
+    qty = parse_number(qty, "Số lượng tồn", default=0.0, minimum=0.0)
+    cost = parse_number(cost, "Giá vốn", default=0.0, minimum=0.0)
+    price = parse_number(price, "Giá bán", default=0.0, minimum=0.0)
+    min_qty = parse_number(min_qty, "Ngưỡng cảnh báo", default=0.0, minimum=0.0)
+    current = conn.execute(
+        "SELECT qty, cost FROM inventory WHERE id=?", (item_id,)
+    ).fetchone()
+    if not current:
+        raise ValueError(f"Không tìm thấy mặt hàng #{item_id}")
+    try:
+        location_rows = conn.execute(
+            "SELECT COUNT(*) FROM inventory_location_balances WHERE item_id=?", (item_id,)
+        ).fetchone()[0]
+    except sqlite3.OperationalError:
+        location_rows = 0
+    if location_rows and (
+        abs(float(current[0] or 0.0) - qty) > 0.000001
+        or abs(float(current[1] or 0.0) - cost) > 0.01
+    ):
+        raise ValueError(
+            "Mặt hàng đã theo dõi theo địa điểm; không sửa trực tiếp tồn hoặc giá vốn. "
+            "Hãy dùng nhập/xuất/điều chuyển có lý do"
+        )
     conn.execute(
         "UPDATE inventory SET name=?, unit=?, base_unit=?, conv_factor=?, qty=?, cost=?, price=?, batch_no=?, category=?, min_qty=? WHERE id=?",
-        (name, unit, base_unit, conv_factor, qty, cost, price, batch_no, category, min_qty, item_id)
+        (name, unit, base_unit, conv_factor, qty, cost, price,
+         str(batch_no or "").strip(), str(category or "Hàng hóa").strip() or "Hàng hóa", min_qty, item_id)
     )
     conn.commit()
 
 def get_inventory(conn):
-    return pd.read_sql("SELECT * FROM inventory", conn)
+    df = pd.read_sql("SELECT * FROM inventory", conn)
+    for column, default in {
+        "conv_factor": 1.0, "qty": 0.0, "cost": 0.0,
+        "price": 0.0, "min_qty": 0.0,
+    }.items():
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(default)
+    if "category" in df.columns:
+        df["category"] = df["category"].fillna("").astype(str).map(
+            lambda value: "Hàng hóa" if value.strip().lower() in {"", "chung", "none", "nan"} else value.strip()
+        )
+    return df
 
 def delete_inventory(conn, item_id):
     conn.execute("DELETE FROM inventory WHERE id=?", (item_id,))
@@ -728,7 +1054,11 @@ def update_asset(conn, asset_id, name, value, dep_months, start_date):
     conn.commit()
 
 def get_assets(conn):
-    return pd.read_sql("SELECT * FROM fixed_assets", conn)
+    df = pd.read_sql("SELECT * FROM fixed_assets", conn)
+    for column, default in {"value": 0.0, "dep_months": 36, "accumulated_dep": 0.0}.items():
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(default)
+    return df
 
 def delete_asset(conn, asset_id):
     conn.execute("DELETE FROM fixed_assets WHERE id=?", (asset_id,))
@@ -776,9 +1106,11 @@ def save_invoice(
     inventory_cogs = 0.0
     journal_entry_id = None
     with conn:
-        conn.execute("""INSERT INTO invoices (inv_number, inv_type, client_id, date, items_json,
-                        subtotal, vat, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)""",
-                     (inv_number, inv_type, client_id, date, items_json, subtotal, vat, total, pdf_path))
+        invoice_id = conn.execute(
+            """INSERT INTO invoices (inv_number, inv_type, client_id, date, items_json,
+               subtotal, vat, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (inv_number, inv_type, client_id, date, items_json, subtotal, vat, total, pdf_path),
+        ).lastrowid
 
         from core.inventory import post_stock_out
         for item in items:
@@ -795,7 +1127,9 @@ def save_invoice(
                 ).fetchone()
             if stock_row:
                 iid, factor = stock_row
-                deduct_qty = float(item["qty"]) * float(factor or 1.0)
+                from core.validation import parse_number
+                safe_factor = parse_number(factor, "Tỷ lệ quy đổi", default=1.0, minimum=0.000001)
+                deduct_qty = float(item["qty"]) * safe_factor
                 inventory_cogs += float(post_stock_out(
                     conn,
                     iid,
@@ -821,6 +1155,7 @@ def save_invoice(
                 normalized,
                 "Sales",
                 client_id,
+                invoice_id=invoice_id,
             )
 
     # The caller can use this cost to post the matching Dr 632 / Cr 156 lines.
@@ -829,21 +1164,84 @@ def save_invoice(
 
 def get_invoices(conn, client_id=None):
     if client_id:
-        return pd.read_sql("SELECT * FROM invoices WHERE client_id=? ORDER BY created_at DESC", conn, params=(client_id,))
-    return pd.read_sql("SELECT * FROM invoices ORDER BY created_at DESC", conn)
+        df = pd.read_sql(
+            "SELECT i.*, c.name AS client_name FROM invoices i "
+            "LEFT JOIN clients c ON c.id=i.client_id "
+            "WHERE i.client_id=? ORDER BY i.created_at DESC",
+            conn,
+            params=(client_id,),
+        )
+    else:
+        df = pd.read_sql(
+            "SELECT i.*, c.name AS client_name FROM invoices i "
+            "LEFT JOIN clients c ON c.id=i.client_id ORDER BY i.created_at DESC",
+            conn,
+        )
+    for column in ("subtotal", "vat", "total"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+    return df
 
 def delete_invoice(conn, inv_number):
-    """Delete an invoice and all linked accounting entries."""
+    """Delete a locally issued, unsettled invoice and safely reverse its stock effect.
+
+    An invoice is only removable while its own period remains open. Later stock
+    movements make a physical rollback ambiguous, so those cases must use an
+    explicit correction workflow instead of rewriting history.
+    """
     cur = conn.cursor()
-    # Find linked entry IDs
-    cur.execute("SELECT id FROM journal_entries WHERE ref=?", (inv_number,))
-    entry_ids = [r[0] for r in cur.fetchall()]
-    for eid in entry_ids:
-        cur.execute("DELETE FROM journal_lines WHERE entry_id=?", (eid,))
-        cur.execute("DELETE FROM journal_entries WHERE id=?", (eid,))
-    # Delete invoice record
-    cur.execute("DELETE FROM invoices WHERE inv_number=?", (inv_number,))
-    conn.commit()
+    invoice = cur.execute(
+        "SELECT id, date, client_id FROM invoices WHERE inv_number=?", (inv_number,)
+    ).fetchone()
+    if not invoice:
+        return False
+    invoice_id, invoice_date, client_id = invoice
+    assert_period_open(conn, invoice_date)
+
+    settlement_count = cur.execute(
+        "SELECT COUNT(*) FROM settlement_allocations WHERE invoice_id=?", (invoice_id,)
+    ).fetchone()[0]
+    if settlement_count:
+        raise ValueError("Không thể xóa hóa đơn đã được cấn trừ; hãy lập chứng từ điều chỉnh")
+
+    stock_rows = cur.execute(
+        "SELECT id, item_id, qty FROM inventory_log WHERE type='OUT' AND note=? ORDER BY id",
+        (f"HĐ {inv_number}",),
+    ).fetchall()
+    for log_id, item_id, _ in stock_rows:
+        later_movement = cur.execute(
+            "SELECT 1 FROM inventory_log WHERE item_id=? AND id>? LIMIT 1", (item_id, log_id)
+        ).fetchone()
+        if later_movement:
+            raise ValueError(
+                "Không thể xóa hóa đơn vì hàng đã có biến động kho sau đó; hãy lập chứng từ điều chỉnh"
+            )
+
+    entry_ids = [
+        row[0]
+        for row in cur.execute("SELECT id FROM journal_entries WHERE invoice_id=?", (invoice_id,)).fetchall()
+    ]
+    if not entry_ids:
+        # Older databases have no invoice_id link. Only accept one unambiguous
+        # sales entry; never delete an unrelated voucher that shares a ref.
+        entry_ids = [
+            row[0]
+            for row in cur.execute(
+                "SELECT id FROM journal_entries WHERE ref=? AND type='Sales' AND client_id=?",
+                (inv_number, client_id),
+            ).fetchall()
+        ]
+        if len(entry_ids) > 1:
+            raise ValueError("Không thể xác định duy nhất bút toán hóa đơn cũ; hãy lập chứng từ điều chỉnh")
+
+    with conn:
+        for _, item_id, qty in stock_rows:
+            cur.execute("UPDATE inventory SET qty=COALESCE(qty, 0)+? WHERE id=?", (qty, item_id))
+        if stock_rows:
+            cur.executemany("DELETE FROM inventory_log WHERE id=?", [(row[0],) for row in stock_rows])
+        cur.executemany("DELETE FROM journal_entries WHERE id=?", [(entry_id,) for entry_id in entry_ids])
+        cur.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
+    return True
 
 def get_revenue_summary(conn, period="month"):
     """Get revenue totals by day/month/year."""
@@ -900,3 +1298,180 @@ def get_client_debt_details(conn, client_id):
         ORDER BY e.date DESC, e.id DESC
     """
     return pd.read_sql(sql, conn, params=(client_id,))
+
+# ── Suppliers ─────────────────────────────────────────────────
+def add_supplier(conn, name, tax_code='', address='', bank_account='', bank_name='',
+                 contact_person='', phone='', email='', payment_terms_days=30, notes=''):
+    cur = conn.cursor()
+    cur.execute(
+        '''INSERT INTO suppliers(name, tax_code, address, bank_account, bank_name,
+           contact_person, phone, email, payment_terms_days, notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (name, tax_code, address, bank_account, bank_name,
+         contact_person, phone, email, payment_terms_days, notes))
+    conn.commit()
+    return cur.lastrowid
+
+def get_suppliers(conn):
+    return pd.read_sql("SELECT * FROM suppliers ORDER BY name", conn)
+
+def update_supplier(conn, supplier_id, **kwargs):
+    allowed = {'name','tax_code','address','bank_account','bank_name',
+               'contact_person','phone','email','payment_terms_days','notes'}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    sets = ', '.join(f'{k}=?' for k in fields)
+    vals = list(fields.values()) + [supplier_id]
+    conn.execute(f'UPDATE suppliers SET {sets} WHERE id=?', vals)
+    conn.commit()
+
+def delete_supplier(conn, supplier_id):
+    conn.execute('DELETE FROM suppliers WHERE id=?', (supplier_id,))
+    conn.commit()
+
+# ── Settlement Allocation ─────────────────────────────────────
+def allocate_settlement(conn, payment_entry_id, invoice_id, amount, notes='', commit=True):
+    """Allocate a valid AR/AP payment to a specific invoice.
+
+    The allocation cannot exceed either the invoice outstanding amount or the
+    payment's posted 131/331 control-account capacity.
+    """
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError('Số tiền phân bổ không hợp lệ')
+    if amount <= 0:
+        raise ValueError('Số tiền phân bổ phải lớn hơn 0')
+
+    invoice = conn.execute(
+        'SELECT total, client_id, supplier_id FROM invoices WHERE id=?', (invoice_id,)
+    ).fetchone()
+    if invoice is None:
+        raise ValueError('Không tìm thấy hóa đơn cần phân bổ')
+
+    payment = conn.execute(
+        'SELECT id, date, client_id, supplier_id FROM journal_entries WHERE id=?', (payment_entry_id,)
+    ).fetchone()
+    if payment is None:
+        raise ValueError('Không tìm thấy bút toán thanh toán')
+
+    _, payment_date, payment_client_id, payment_supplier_id = payment
+    assert_period_open(conn, payment_date)
+    _, invoice_client_id, invoice_supplier_id = invoice
+    if invoice_client_id is not None and invoice_supplier_id is not None:
+        raise ValueError('Hóa đơn không thể đồng thời thuộc khách hàng và nhà cung cấp')
+    if invoice_client_id is not None:
+        if payment_client_id != invoice_client_id:
+            raise ValueError('Bút toán thanh toán không thuộc khách hàng của hóa đơn')
+        control_balance = conn.execute(
+            "SELECT COALESCE(SUM(credit - debit), 0) FROM journal_lines "
+            "WHERE entry_id=? AND account LIKE '131%'",
+            (payment_entry_id,),
+        ).fetchone()[0]
+        control_label = 'ghi Có TK 131'
+    elif invoice_supplier_id is not None:
+        if payment_supplier_id != invoice_supplier_id:
+            raise ValueError('Bút toán thanh toán không thuộc nhà cung cấp của hóa đơn')
+        control_balance = conn.execute(
+            "SELECT COALESCE(SUM(debit - credit), 0) FROM journal_lines "
+            "WHERE entry_id=? AND account LIKE '331%'",
+            (payment_entry_id,),
+        ).fetchone()[0]
+        control_label = 'ghi Nợ TK 331'
+    else:
+        raise ValueError('Hóa đơn thiếu thông tin khách hàng hoặc nhà cung cấp')
+    control_balance = float(control_balance or 0)
+    if control_balance <= 0:
+        raise ValueError(f'Bút toán thanh toán phải {control_label}')
+
+    settled = conn.execute(
+        'SELECT COALESCE(SUM(amount), 0) FROM settlement_allocations WHERE invoice_id=?',
+        (invoice_id,),
+    ).fetchone()[0] or 0
+    outstanding = float(invoice[0] or 0) - float(settled)
+    if amount > outstanding + 0.01:
+        raise ValueError(
+            f'Số tiền phân bổ vượt số dư hóa đơn còn lại ({outstanding:,.2f})'
+        )
+
+    allocated_from_payment = conn.execute(
+        'SELECT COALESCE(SUM(amount), 0) FROM settlement_allocations WHERE payment_entry_id=?',
+        (payment_entry_id,),
+    ).fetchone()[0] or 0
+    remaining_capacity = control_balance - float(allocated_from_payment)
+    if amount > remaining_capacity + 0.01:
+        raise ValueError(
+            f'Số tiền phân bổ vượt khả năng cấn trừ của chứng từ ({remaining_capacity:,.2f})'
+        )
+
+    cursor = conn.execute(
+        'INSERT INTO settlement_allocations(invoice_id, payment_entry_id, amount, notes) VALUES (?,?,?,?)',
+        (invoice_id, payment_entry_id, amount, notes))
+    if commit:
+        conn.commit()
+    return cursor.lastrowid
+
+def get_invoice_settlements(conn, invoice_id):
+    """Get all settlements for an invoice."""
+    return pd.read_sql(
+        '''SELECT sa.id, sa.payment_entry_id, sa.amount, sa.allocated_at, sa.notes,
+                  e.date as payment_date, e.ref as payment_ref
+           FROM settlement_allocations sa
+           JOIN journal_entries e ON sa.payment_entry_id = e.id
+           WHERE sa.invoice_id = ?
+           ORDER BY sa.allocated_at''',
+        conn, params=(invoice_id,))
+
+def get_open_invoices(conn, client_id=None, supplier_id=None):
+    """Get invoices with outstanding balance (total - settled)."""
+    clauses = ['1=1']
+    params = []
+    if client_id is not None:
+        clauses.append('i.client_id = ?')
+        params.append(client_id)
+    if supplier_id is not None:
+        clauses.append('i.supplier_id = ?')
+        params.append(supplier_id)
+    where = ' AND '.join(clauses)
+    sql = f'''
+        SELECT i.id, i.inv_number, i.inv_type, i.date, i.due_date,
+               i.total, i.client_id, i.supplier_id,
+               COALESCE(c.name, s.name, '') AS party_name,
+               COALESCE(SUM(sa.amount), 0) as settled,
+               i.total - COALESCE(SUM(sa.amount), 0) as outstanding
+        FROM invoices i
+        LEFT JOIN clients c ON c.id = i.client_id
+        LEFT JOIN suppliers s ON s.id = i.supplier_id
+        LEFT JOIN settlement_allocations sa ON i.id = sa.invoice_id
+        WHERE {where}
+        GROUP BY i.id
+        HAVING outstanding > 0.01
+        ORDER BY i.date
+    '''
+    return pd.read_sql(sql, conn, params=params)
+
+def get_supplier_debt_summary(conn):
+    """AP summary grouped by supplier."""
+    sql = '''
+        SELECT s.id as supplier_id, s.name as supplier_name,
+               SUM(CASE WHEN l.account LIKE '331%' THEN l.credit - l.debit ELSE 0 END) AS payable
+        FROM suppliers s
+        LEFT JOIN journal_entries e ON s.id = e.supplier_id
+        LEFT JOIN journal_lines l ON e.id = l.entry_id
+        GROUP BY s.id
+        HAVING payable <> 0
+    '''
+    return pd.read_sql(sql, conn)
+
+
+def get_supplier_debt_details(conn, supplier_id):
+    """List transactions affecting account 331 for one supplier."""
+    sql = """
+        SELECT e.date, e.ref, e.note, l.account, l.debit, l.credit
+        FROM journal_entries e
+        JOIN journal_lines l ON e.id = l.entry_id
+        WHERE e.supplier_id = ? AND l.account LIKE '331%'
+        ORDER BY e.date DESC, e.id DESC
+    """
+    return pd.read_sql(sql, conn, params=(supplier_id,))

@@ -3,6 +3,8 @@ data/*.db
 data/backups/
 data/logs/
 data/settings.json
+data/ai_profiles.json
+data/market_cache.json
 invoices/*.pdf
 contracts/*.docx
 backups/
@@ -26,3 +28,18 @@ handover_*/
 # OS
 Thumbs.db
 .DS_Store
+desktop.ini
+build_pyqt6.err
+build_pyqt6.log
+lbl_output.txt
+
+# Generated local QA output and scratch-only inputs
+/qa_*.png
+/ui_review_ledger_*.png
+/legal_before_fix.png
+/scratch/
+/temp/
+/qa_docx/
+/db/vsic_2026.csv
+/logs/demo_*.log
+/.pytest_cache/
